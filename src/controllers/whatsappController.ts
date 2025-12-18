@@ -133,14 +133,15 @@ export const getWhatsAppStatus = async (req: Request, res: Response) => {
     const messages = await WhatsAppMessage.find({ eventId })
       .populate('guestId', 'fullname phone')
       .sort({ sentAt: -1 })
-      .limit(100);
+      .limit(100)
+      .lean()
+      .exec() as any[];
 
     res.json({
       stats,
-      messages: messages.map(msg => ({
+      messages: messages.map((msg: any) => ({
         id: msg._id,
-        guestName: (msg.guestId as any)?.fullname || 'Unknown',
-        
+        guestName: msg.guestId?.fullname || 'Unknown',
         phoneNumber: msg.phoneNumber,
         status: msg.status,
         templateName: msg.templateName,

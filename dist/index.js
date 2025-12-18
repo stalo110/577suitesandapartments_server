@@ -14,6 +14,7 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const adminRoutes_1 = __importDefault(require("./routes/adminRoutes"));
 const eventsRoutes_1 = __importDefault(require("./routes/eventsRoutes"));
 const guestRoutes_1 = __importDefault(require("./routes/guestRoutes"));
+const whatsappRoutes_1 = __importDefault(require("./routes/whatsappRoutes"));
 const dbConnect_1 = require("./library/middlewares/dbConnect");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
@@ -49,6 +50,7 @@ app.use(dbConnect_1.dbConnect); // ensures DB connection before any route
 app.use("/admin", adminRoutes_1.default);
 app.use("/events", eventsRoutes_1.default);
 app.use("/guest", guestRoutes_1.default);
+app.use("/whatsapp", whatsappRoutes_1.default);
 // --- Error handler ---
 app.use((err, req, res, next) => {
     console.error(err);
