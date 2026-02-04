@@ -19,6 +19,7 @@ export class Booking extends Model<InferAttributes<Booking>, InferCreationAttrib
   declare status: CreationOptional<'PENDING' | 'CONFIRMED' | 'CANCELLED'>;
   declare paymentStatus: CreationOptional<'UNPAID' | 'PAID'>;
   declare bookingReference: string;
+  declare suite?: Suite;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
 }

@@ -1,6 +1,11 @@
 import { Request, Response } from 'express';
 import { Payment } from '../models/PaymentModel';
 import { Booking } from '../models/BookingModel';
+import { Suite } from '../models/SuiteModel';
+import {
+  sendAdminPaymentNotification,
+  sendPaymentConfirmationEmail,
+} from '../utils/mailer';
 
 export const initializePayment = async (req: Request, res: Response) => {
   try {
@@ -59,6 +64,33 @@ export const verifyPayment = async (req: Request, res: Response) => {
       { status: 'CONFIRMED', paymentStatus: 'PAID' },
       { where: { id: Number(payment.bookingId) } }
     );
+
+    const booking = await Booking.findByPk(payment.bookingId, {
+      include: [{ model: Suite, as: 'suite' }],
+    });
+    const suite = booking?.suite;
+    if (booking && suite) {
+      try {
+        await Promise.all([
+          sendPaymentConfirmationEmail(
+            booking.email,
+            booking.guestName,
+            suite.name,
+            Number(payment.amount),
+            payment.reference
+          ),
+          sendAdminPaymentNotification(
+            booking.guestName,
+            booking.email,
+            suite.name,
+            Number(payment.amount),
+            payment.reference
+          ),
+        ]);
+      } catch (emailError) {
+        console.error('Failed to send payment emails:', emailError);
+      }
+    }
 
     return res.json({
       id: String(payment.id),

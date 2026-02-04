@@ -14,6 +14,7 @@ import AdminSuitesRouter from './routes/adminSuitesRoutes';
 import AvailabilityRouter from './routes/availabilityRoutes';
 import BookingsRouter from './routes/bookingsRoutes';
 import PaymentsRouter from './routes/paymentsRoutes';
+import ContactRouter from './routes/contactRoutes';
 
 dotenv.config();
 
@@ -59,6 +60,7 @@ app.use(AdminSuitesRouter);
 app.use(AvailabilityRouter);
 app.use(BookingsRouter);
 app.use(PaymentsRouter);
+app.use(ContactRouter);
 
 app.use((req: Request, _res: Response, next: NextFunction) => {
   next(createError(404, 'Not Found'));

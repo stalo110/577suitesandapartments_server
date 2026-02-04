@@ -2,6 +2,10 @@ import { Op } from 'sequelize';
 import { Request, Response } from 'express';
 import { Booking } from '../models/BookingModel';
 import { Suite } from '../models/SuiteModel';
+import {
+  sendAdminBookingNotification,
+  sendBookingConfirmationEmail,
+} from '../utils/mailer';
 
 const toBookingResponse = (booking: Booking) => ({
   id: String(booking.id),
@@ -78,6 +82,31 @@ export const createBooking = async (req: Request, res: Response) => {
       otherOrderAmount,
       bookingReference,
     });
+
+    try {
+      await Promise.all([
+        sendBookingConfirmationEmail(
+          email,
+          bookingReference,
+          guestName,
+          suite.name,
+          checkIn,
+          checkOut,
+          totalAmount
+        ),
+        sendAdminBookingNotification(
+          bookingReference,
+          suite.name,
+          guestName,
+          email,
+          checkIn,
+          checkOut,
+          totalAmount
+        ),
+      ]);
+    } catch (emailError) {
+      console.error('Failed to send booking emails:', emailError);
+    }
 
     return res.status(201).json(toBookingResponse(booking));
   } catch (_error) {

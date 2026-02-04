@@ -19,10 +19,12 @@ const adminSuitesRoutes_1 = __importDefault(require("./routes/adminSuitesRoutes"
 const availabilityRoutes_1 = __importDefault(require("./routes/availabilityRoutes"));
 const bookingsRoutes_1 = __importDefault(require("./routes/bookingsRoutes"));
 const paymentsRoutes_1 = __importDefault(require("./routes/paymentsRoutes"));
+const contactRoutes_1 = __importDefault(require("./routes/contactRoutes"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const allowedOrigins = [
-    'http://localhost:3039',
+    'http://localhost:5173',
+    `http://localhost:3039`,
     'http://localhost:3040',
     'http://localhost:4000',
     process.env.PUBLIC_CLIENT_URL || '',
@@ -57,6 +59,7 @@ app.use(adminSuitesRoutes_1.default);
 app.use(availabilityRoutes_1.default);
 app.use(bookingsRoutes_1.default);
 app.use(paymentsRoutes_1.default);
+app.use(contactRoutes_1.default);
 app.use((req, _res, next) => {
     next((0, http_errors_1.default)(404, 'Not Found'));
 });
