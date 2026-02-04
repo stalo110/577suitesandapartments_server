@@ -13,6 +13,18 @@
     "types": ["node"], 
     "skipLibCheck": true  
   },
-  "include": ["src"],
+  "include": [
+    "src/index.ts",
+    "src/db.ts",
+    "src/models/BookingModel.ts",
+    "src/models/PaymentModel.ts",
+    "src/models/SuiteModel.ts",
+    "src/routes/authRoutes.ts",
+    "src/routes/suitesRoutes.ts",
+    "src/routes/adminSuitesRoutes.ts",
+    "src/routes/availabilityRoutes.ts",
+    "src/routes/bookingsRoutes.ts",
+    "src/routes/paymentsRoutes.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

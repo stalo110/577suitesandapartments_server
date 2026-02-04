@@ -1,97 +1,26 @@
-// import mongoose from "mongoose";
-// import dotenv from "dotenv";
-
-
-// dotenv.config();
-
-// const url: string =
-//   process.env.MONGODB_URL || "mongodb://localhost:27017/softinvites";
-
-// export async function connectDB() {
-//   try {
-//     await mongoose.connect(url);
-//     console.log("✅ Database connected");
-
-//     // Ensure database is initialized
-//     const db = mongoose.connection.db;
-//     if (!db) {
-//       console.error("❌ Database is not initialized");
-//       return;
-//     }
-//   } catch (error) {
-//     console.error("❌ Database connection error:", error);
-//   }
-// }
-
-
-
-
-
-// import mongoose from "mongoose";
-// import dotenv from "dotenv";
-
-// dotenv.config();
-
-// let cachedConnection: typeof mongoose | null = null;
-
-// export async function connectDB() {
-//   if (cachedConnection) {
-//     return cachedConnection;
-//   }
-
-//   try {
-//     const connection = await mongoose.connect(process.env.MONGODB_URI!, {
-//       family: 4,
-//       serverSelectionTimeoutMS: 30000,
-//       socketTimeoutMS: 45000,
-//       maxPoolSize: 10,
-//     });
-
-//     cachedConnection = connection;
-//     console.log("✅ Database connected");
-//     return connection;
-//   } catch (error) {
-//     console.error("❌ Database connection error:", error);
-//     throw error;
-//   }
-// }
-
-// // For Lambda cold starts
-// export async function ensureConnection() {
-//   if (!cachedConnection) {
-//     await connectDB();
-//   }
-//   return cachedConnection!;
-// }
-
-
-import mongoose from "mongoose";
-import dotenv from "dotenv";
+import { Sequelize } from 'sequelize';
+import dotenv from 'dotenv';
 
 dotenv.config();
 
-let cachedConnection: typeof mongoose | null = null;
+const database = process.env.DB_NAME || 'vip_suites';
+const username = process.env.DB_USER || 'root';
+const password = process.env.DB_PASSWORD || '';
+const host = process.env.DB_HOST || '127.0.0.1';
+const port = Number(process.env.DB_PORT || 3306);
 
-mongoose.set("bufferCommands", false); // 👈 important for Lambda
+export const sequelize = new Sequelize(database, username, password, {
+  host,
+  port,
+  dialect: 'mysql',
+  logging: process.env.DB_LOGGING === 'true' ? console.log : false,
+  timezone: '+01:00',
+  define: {
+    freezeTableName: true,
+    underscored: false,
+  },
+});
 
 export async function connectDB() {
-  if (cachedConnection) {
-    return cachedConnection;
-  }
-
-  try {
-    const connection = await mongoose.connect(process.env.MONGODB_URI!, {
-      family: 4,
-      serverSelectionTimeoutMS: 30000, // wait up to 30s for MongoDB
-      socketTimeoutMS: 45000,
-      maxPoolSize: 10,
-    });
-
-    cachedConnection = connection;
-    console.log("✅ Database connected");
-    return connection;
-  } catch (error) {
-    console.error("❌ Database connection error:", error);
-    throw error;
-  }
+  await sequelize.authenticate();
 }
