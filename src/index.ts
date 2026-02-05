@@ -1,31 +1,34 @@
-import dotenv from 'dotenv';
-import express, { NextFunction, Request, Response } from 'express';
-import cors, { CorsOptions } from 'cors';
-import cookieParser from 'cookie-parser';
-import logger from 'morgan';
-import createError from 'http-errors';
-import serverless from 'serverless-http';
-import { connectDB, sequelize } from './db';
-import { ensureDemoUsers } from './models/UserModel';
+import dotenv from "dotenv";
+import express, { NextFunction, Request, Response } from "express";
+import cors, { CorsOptions } from "cors";
+import cookieParser from "cookie-parser";
+import logger from "morgan";
+import createError from "http-errors";
+import serverless from "serverless-http";
+import { connectDB, sequelize } from "./db";
+import { ensureDemoUsers } from "./models/UserModel";
 
-import AuthRouter from './routes/authRoutes';
-import SuitesRouter from './routes/suitesRoutes';
-import AdminSuitesRouter from './routes/adminSuitesRoutes';
-import AvailabilityRouter from './routes/availabilityRoutes';
-import BookingsRouter from './routes/bookingsRoutes';
-import PaymentsRouter from './routes/paymentsRoutes';
-import ContactRouter from './routes/contactRoutes';
+import AuthRouter from "./routes/authRoutes";
+import SuitesRouter from "./routes/suitesRoutes";
+import AdminSuitesRouter from "./routes/adminSuitesRoutes";
+import AvailabilityRouter from "./routes/availabilityRoutes";
+import BookingsRouter from "./routes/bookingsRoutes";
+import PaymentsRouter from "./routes/paymentsRoutes";
+import ContactRouter from "./routes/contactRoutes";
 
 dotenv.config();
 
 const app = express();
 
 const allowedOrigins: string[] = [
-  'http://localhost:5173',
+  "http://localhost:5173",
+  `https://517vipsuitesandapartments.org`,
+  `https://www.517vipsuitesandapartments.org`,
+  `517vipsuitesandapartments.org`,
   `http://localhost:3039`,
-  'http://localhost:3040',
-  'http://localhost:4000',
-  process.env.PUBLIC_CLIENT_URL || '',
+  "http://localhost:3040",
+  "http://localhost:4000",
+  process.env.PUBLIC_CLIENT_URL || "",
 ].filter(Boolean);
 
 const corsOptions: CorsOptions = {
@@ -34,23 +37,23 @@ const corsOptions: CorsOptions = {
       callback(null, true);
       return;
     }
-    callback(new Error('Not allowed by CORS'));
+    callback(new Error("Not allowed by CORS"));
   },
   credentials: true,
 };
 
 app.use(cors(corsOptions));
-app.use(logger('dev'));
+app.use(logger("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-app.get('/health', async (_req: Request, res: Response) => {
+app.get("/health", async (_req: Request, res: Response) => {
   try {
     await connectDB();
-    res.json({ status: 'ok', database: 'mysql' });
+    res.json({ status: "ok", database: "mysql" });
   } catch (error) {
-    res.status(500).json({ status: 'error', database: 'mysql' });
+    res.status(500).json({ status: "error", database: "mysql" });
   }
 });
 
@@ -63,17 +66,17 @@ app.use(PaymentsRouter);
 app.use(ContactRouter);
 
 app.use((req: Request, _res: Response, next: NextFunction) => {
-  next(createError(404, 'Not Found'));
+  next(createError(404, "Not Found"));
 });
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   const status = err.status || 500;
-  res.status(status).json({ message: err.message || 'Internal server error' });
+  res.status(status).json({ message: err.message || "Internal server error" });
 });
 
 export const handler = serverless(app);
 
-if (process.env.NODE_ENV !== 'production') {
+if (process.env.NODE_ENV !== "production") {
   const PORT = Number(process.env.PORT || 4000);
   sequelize
     .sync()
@@ -87,6 +90,6 @@ if (process.env.NODE_ENV !== 'production') {
       });
     })
     .catch((error) => {
-      console.error('Unable to start server:', error);
+      console.error("Unable to start server:", error);
     });
 }

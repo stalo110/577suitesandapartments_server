@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import type { Express } from 'express';
 import { Suite } from '../models/SuiteModel';
 
 const parseStringArray = (value: unknown): string[] => {
