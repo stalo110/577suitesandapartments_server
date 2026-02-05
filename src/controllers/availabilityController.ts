@@ -3,6 +3,32 @@ import { Request, Response } from 'express';
 import { Suite } from '../models/SuiteModel';
 import { Booking } from '../models/BookingModel';
 
+const parseStringArray = (value: unknown): string[] => {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(Boolean);
+      }
+    } catch (_error) {
+      return value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+  }
+
+  return [];
+};
+
 const serializeSuite = (suite: Suite) => ({
   id: String(suite.id),
   name: suite.name,
@@ -10,8 +36,8 @@ const serializeSuite = (suite: Suite) => ({
   price: Number(suite.price),
   description: suite.description,
   maxGuests: suite.maxGuests,
-  images: suite.images || [],
-  amenities: suite.amenities || [],
+  images: parseStringArray(suite.images),
+  amenities: parseStringArray(suite.amenities),
   isAvailable: suite.isAvailable,
   createdAt: suite.createdAt,
   updatedAt: suite.updatedAt,
