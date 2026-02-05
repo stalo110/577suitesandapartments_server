@@ -112,9 +112,11 @@ export const updateSuite = async (req: Request, res: Response) => {
     }
 
     const uploadedImages = extractUploadedImages(req.files as Express.Multer.File[]);
+    const existingImagesProvided = Object.prototype.hasOwnProperty.call(req.body, 'existingImages');
     const existingImages = parseStringArray(req.body.existingImages);
-    const baseImages =
-      existingImages.length > 0 ? existingImages : suite.images || [];
+    const baseImages = existingImagesProvided ? existingImages : suite.images || [];
+    const amenitiesProvided = Object.prototype.hasOwnProperty.call(req.body, 'amenities');
+    const parsedAmenities = parseStringArray(req.body.amenities);
     const payload = {
       name: req.body.name ?? suite.name,
       type: req.body.type ?? suite.type,
@@ -129,10 +131,7 @@ export const updateSuite = async (req: Request, res: Response) => {
         req.body.isAvailable !== undefined
           ? parseBoolean(req.body.isAvailable, suite.isAvailable ?? true)
           : suite.isAvailable,
-      amenities: (() => {
-        const parsed = parseStringArray(req.body.amenities);
-        return parsed.length ? parsed : suite.amenities || [];
-      })(),
+      amenities: amenitiesProvided ? parsedAmenities : suite.amenities || [],
       images: [...baseImages, ...uploadedImages],
     };
 

@@ -4,7 +4,6 @@ import cors, { CorsOptions } from "cors";
 import cookieParser from "cookie-parser";
 import logger from "morgan";
 import createError from "http-errors";
-import serverless from "serverless-http";
 import { connectDB, sequelize } from "./db";
 import { ensureDemoUsers } from "./models/UserModel";
 
@@ -15,6 +14,9 @@ import AvailabilityRouter from "./routes/availabilityRoutes";
 import BookingsRouter from "./routes/bookingsRoutes";
 import PaymentsRouter from "./routes/paymentsRoutes";
 import ContactRouter from "./routes/contactRoutes";
+import GalleryRouter from "./routes/galleryRoutes";
+import AdminGalleryRouter from "./routes/adminGalleryRoutes";
+import ReportsRouter from "./routes/reportsRoutes";
 
 dotenv.config();
 
@@ -64,6 +66,9 @@ app.use(AvailabilityRouter);
 app.use(BookingsRouter);
 app.use(PaymentsRouter);
 app.use(ContactRouter);
+app.use(GalleryRouter);
+app.use(AdminGalleryRouter);
+app.use(ReportsRouter);
 
 app.use((req: Request, _res: Response, next: NextFunction) => {
   next(createError(404, "Not Found"));
@@ -74,22 +79,26 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   res.status(status).json({ message: err.message || "Internal server error" });
 });
 
-export const handler = serverless(app);
-
-if (process.env.NODE_ENV !== "production") {
+const startServer = async () => {
   const PORT = Number(process.env.PORT || 4000);
-  sequelize
-    .sync()
-    .then(async () => {
-      await ensureDemoUsers();
-      await connectDB();
-      // await sequelize.sync({ alter: true });
-      console.log(`Database connected`);
-      app.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
-      });
-    })
-    .catch((error) => {
-      console.error("Unable to start server:", error);
-    });
-}
+  const shouldSeedDemoUsers =
+    process.env.SEED_DEMO_USERS === "true" || process.env.NODE_ENV !== "production";
+
+  if (process.env.DB_SYNC === "true") {
+    await sequelize.sync();
+  }
+
+  await connectDB();
+  if (shouldSeedDemoUsers) {
+    await ensureDemoUsers();
+  }
+
+  console.log("Database connected");
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+};
+
+startServer().catch((error) => {
+  console.error("Unable to start server:", error);
+});

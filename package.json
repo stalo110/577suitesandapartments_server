@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
     "build": "tsc",
+    "migrate": "ts-node src/scripts/migrate.ts",
     "start": "node dist/index.js",
     "seed:demo-users": "ts-node src/scripts/seedDemoUsers.ts"
   },
@@ -34,8 +35,7 @@
     "multer-storage-cloudinary": "^4.0.0",
     "mysql2": "^3.11.3",
     "nodemailer": "^6.9.4",
-    "sequelize": "^6.37.3",
-    "serverless-http": "^3.2.0"
+    "sequelize": "^6.37.3"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.8",

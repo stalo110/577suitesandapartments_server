@@ -60,8 +60,8 @@ export const guestLogin = async (req: Request, res: Response) => {
 
 export const guestRegister = async (req: Request, res: Response) => {
   const { email, password } = req.body;
-  if (!email) {
-    return res.status(400).json({ message: 'Email is required' });
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email and password are required' });
   }
 
   const existing = await User.findOne({ where: { email, role: 'GUEST' } });
@@ -69,10 +69,9 @@ export const guestRegister = async (req: Request, res: Response) => {
     return res.status(409).json({ message: 'Guest already registered' });
   }
 
-  const guestPassword = password || process.env.DEMO_GUEST_PASSWORD || 'Guest@517VIP';
   const user = await User.create({
     email,
-    passwordHash: await hashPassword(guestPassword),
+    passwordHash: await hashPassword(password),
     role: 'GUEST',
   });
 
