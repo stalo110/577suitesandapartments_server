@@ -18,6 +18,7 @@ const availabilityRoutes_1 = __importDefault(require("./routes/availabilityRoute
 const bookingsRoutes_1 = __importDefault(require("./routes/bookingsRoutes"));
 const paymentsRoutes_1 = __importDefault(require("./routes/paymentsRoutes"));
 const contactRoutes_1 = __importDefault(require("./routes/contactRoutes"));
+const adminContactRoutes_1 = __importDefault(require("./routes/adminContactRoutes"));
 const galleryRoutes_1 = __importDefault(require("./routes/galleryRoutes"));
 const adminGalleryRoutes_1 = __importDefault(require("./routes/adminGalleryRoutes"));
 const reportsRoutes_1 = __importDefault(require("./routes/reportsRoutes"));
@@ -67,6 +68,7 @@ app.use(availabilityRoutes_1.default);
 app.use(bookingsRoutes_1.default);
 app.use(paymentsRoutes_1.default);
 app.use(contactRoutes_1.default);
+app.use(adminContactRoutes_1.default);
 app.use(galleryRoutes_1.default);
 app.use(adminGalleryRoutes_1.default);
 app.use(reportsRoutes_1.default);

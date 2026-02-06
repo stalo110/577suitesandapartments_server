@@ -1,10 +1,12 @@
 import { sequelize } from '../db';
 import { GalleryItem } from '../models/GalleryModel';
+import { ContactMessage } from '../models/ContactMessageModel';
 
 async function run() {
   try {
     await sequelize.authenticate();
     await GalleryItem.sync();
+    await ContactMessage.sync();
     // Add other model syncs here if needed.
     console.log('Migrations completed successfully');
     await sequelize.close();
