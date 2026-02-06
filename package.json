@@ -35,6 +35,8 @@
     "multer-storage-cloudinary": "^4.0.0",
     "mysql2": "^3.11.3",
     "nodemailer": "^6.9.4",
+    "pdfkit": "^0.15.1",
+    "pngjs": "^7.0.0",
     "sequelize": "^6.37.3"
   },
   "devDependencies": {
@@ -45,6 +47,8 @@
     "@types/morgan": "^1.9.9",
     "@types/multer": "^1.4.7",
     "@types/nodemailer": "^6.4.8",
+    "@types/pdfkit": "^0.13.5",
+    "@types/pngjs": "^6.0.5",
     "@types/node": "^22.19.3",
     "nodemon": "^3.1.10",
     "ts-node": "^10.9.2",

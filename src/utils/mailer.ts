@@ -141,3 +141,16 @@ Phone: ${phone || 'n/a'}
 Subject: ${subject || 'n/a'}
 Message: ${message}`,
   });
+
+export const sendAdminPasswordResetEmail = async (to: string, resetUrl: string) =>
+  transporter.sendMail({
+    ...baseDetails,
+    to,
+    subject: 'Admin password reset request',
+    html: `
+      <p>You requested to reset your admin password.</p>
+      <p>Click the link below to set a new password (valid for 30 minutes):</p>
+      <p><a href="${resetUrl}">${resetUrl}</a></p>
+      <p>If you did not request this, please ignore this email.</p>
+    `,
+  });
