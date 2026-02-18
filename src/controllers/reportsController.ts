@@ -3,6 +3,7 @@ import PDFDocument from 'pdfkit';
 import { Request, Response } from 'express';
 import { Booking } from '../models/BookingModel';
 import { Payment } from '../models/PaymentModel';
+import { RestaurantOrder } from '../models/RestaurantOrderModel';
 import { Suite } from '../models/SuiteModel';
 
 const parseDateRange = (req: Request) => {
@@ -33,7 +34,8 @@ const getIsoWeekLabel = (date: Date) => {
   return `${target.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
 };
 
-const formatMonthKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+const formatMonthKey = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
 const groupCounts = (items: Booking[], keyFn: (date: Date) => string) => {
   const map = new Map<string, number>();
@@ -46,7 +48,11 @@ const groupCounts = (items: Booking[], keyFn: (date: Date) => string) => {
     .sort((a, b) => a.period.localeCompare(b.period));
 };
 
-const buildPdfBuffer = (title: string, periodLabel: string, sections: Array<{ title: string; lines: string[] }>) =>
+const buildPdfBuffer = (
+  title: string,
+  periodLabel: string,
+  sections: Array<{ title: string; lines: string[] }>
+) =>
   new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 48 });
     const chunks: Buffer[] = [];
@@ -72,14 +78,102 @@ const buildPdfBuffer = (title: string, periodLabel: string, sections: Array<{ ti
     doc.end();
   });
 
+type RevenueRow = {
+  id: string;
+  source: 'gateway_payment' | 'manual_booking' | 'restaurant_order';
+  reference: string;
+  bookingId: string | null;
+  amount: number;
+  channel: string;
+  status: string;
+  createdAt: Date | null;
+};
+
+const withinRange = (period: { start: Date; end: Date }) => ({
+  [Op.between]: [period.start, period.end],
+});
+
+const getRevenueRows = async (period: { start: Date; end: Date }): Promise<RevenueRow[]> => {
+  const [payments, manualBookings, restaurantOrders] = await Promise.all([
+    Payment.findAll({
+      where: {
+        status: 'PAID',
+        createdAt: withinRange(period),
+      },
+      order: [['createdAt', 'DESC']],
+    }),
+    Booking.findAll({
+      where: {
+        manualBooking: true,
+        paymentStatus: 'PAID',
+        paymentMethod: {
+          [Op.in]: ['cash', 'transfer'],
+        },
+        createdAt: withinRange(period),
+      },
+      order: [['createdAt', 'DESC']],
+    }),
+    RestaurantOrder.findAll({
+      where: {
+        paymentStatus: 'paid',
+        createdAt: withinRange(period),
+      },
+      order: [['createdAt', 'DESC']],
+    }),
+  ]);
+
+  const paymentRows: RevenueRow[] = payments.map((payment) => ({
+    id: `payment-${payment.id}`,
+    source: 'gateway_payment',
+    reference: payment.reference,
+    bookingId: String(payment.bookingId),
+    amount: Number(payment.amount),
+    channel: String(payment.gateway),
+    status: payment.status,
+    createdAt: payment.createdAt || null,
+  }));
+
+  const bookingRows: RevenueRow[] = manualBookings.map((booking) => ({
+    id: `booking-${booking.id}`,
+    source: 'manual_booking',
+    reference: booking.bookingReference,
+    bookingId: String(booking.id),
+    amount: Number(booking.totalAmount),
+    channel: String(booking.paymentMethod || 'cash').toUpperCase(),
+    status: booking.paymentStatus,
+    createdAt: booking.createdAt || null,
+  }));
+
+  const orderRows: RevenueRow[] = restaurantOrders.map((order) => ({
+    id: `restaurant-${order.id}`,
+    source: 'restaurant_order',
+    reference: `RO-${order.id}`,
+    bookingId: order.bookingId ? String(order.bookingId) : null,
+    amount: Number(order.totalAmount),
+    channel: `RESTAURANT_${String(order.paymentMethod || 'cash').toUpperCase()}`,
+    status: order.paymentStatus,
+    createdAt: order.createdAt || null,
+  }));
+
+  return [...paymentRows, ...bookingRows, ...orderRows].sort((a, b) => {
+    const aTime = a.createdAt ? a.createdAt.getTime() : 0;
+    const bTime = b.createdAt ? b.createdAt.getTime() : 0;
+    return bTime - aTime;
+  });
+};
+
+const getRevenueByChannel = (rows: RevenueRow[]) =>
+  rows.reduce<Record<string, number>>((acc, row) => {
+    acc[row.channel] = (acc[row.channel] || 0) + Number(row.amount);
+    return acc;
+  }, {});
+
 export const getBookingReports = async (req: Request, res: Response) => {
   try {
     const period = parseDateRange(req);
     const bookings = await Booking.findAll({
       where: {
-        createdAt: {
-          [Op.between]: [period.start, period.end],
-        },
+        createdAt: withinRange(period),
       },
       order: [['createdAt', 'DESC']],
     });
@@ -96,6 +190,8 @@ export const getBookingReports = async (req: Request, res: Response) => {
       numberOfGuests: booking.numberOfGuests,
       status: booking.status,
       paymentStatus: booking.paymentStatus,
+      paymentMethod: booking.paymentMethod,
+      manualBooking: booking.manualBooking,
       createdAt: booking.createdAt,
     }));
 
@@ -108,24 +204,17 @@ export const getBookingReports = async (req: Request, res: Response) => {
 export const getRevenueReports = async (req: Request, res: Response) => {
   try {
     const period = parseDateRange(req);
-    const payments = await Payment.findAll({
-      where: {
-        status: 'PAID',
-        createdAt: {
-          [Op.between]: [period.start, period.end],
-        },
-      },
-      order: [['createdAt', 'DESC']],
-    });
+    const rows = await getRevenueRows(period);
 
-    const data = payments.map((payment) => ({
-      id: String(payment.id),
-      bookingId: String(payment.bookingId),
-      amount: Number(payment.amount),
-      gateway: payment.gateway,
-      status: payment.status,
-      reference: payment.reference,
-      createdAt: payment.createdAt,
+    const data = rows.map((row) => ({
+      id: row.id,
+      source: row.source,
+      bookingId: row.bookingId,
+      amount: Number(row.amount),
+      channel: row.channel,
+      reference: row.reference,
+      status: row.status,
+      createdAt: row.createdAt,
     }));
 
     return res.json(toReportResponse(data, period));
@@ -141,14 +230,13 @@ export const getOccupancyReports = async (req: Request, res: Response) => {
       Suite.count(),
       Booking.count({
         where: {
-          createdAt: {
-            [Op.between]: [period.start, period.end],
-          },
+          createdAt: withinRange(period),
         },
       }),
     ]);
 
-    const occupancyRate = totalSuites > 0 ? Number(((bookings / totalSuites) * 100).toFixed(2)) : 0;
+    const occupancyRate =
+      totalSuites > 0 ? Number(((bookings / totalSuites) * 100).toFixed(2)) : 0;
 
     const data = [
       {
@@ -167,42 +255,38 @@ export const getOccupancyReports = async (req: Request, res: Response) => {
 export const getSummaryReport = async (req: Request, res: Response) => {
   try {
     const period = parseDateRange(req);
-    const [bookings, payments, totalSuites] = await Promise.all([
+    const [bookings, totalSuites, revenueRows] = await Promise.all([
       Booking.findAll({
         where: {
-          createdAt: {
-            [Op.between]: [period.start, period.end],
-          },
-        },
-      }),
-      Payment.findAll({
-        where: {
-          status: 'PAID',
-          createdAt: {
-            [Op.between]: [period.start, period.end],
-          },
+          createdAt: withinRange(period),
         },
       }),
       Suite.count(),
+      getRevenueRows(period),
     ]);
 
     const totalBookings = bookings.length;
-    const confirmedBookings = bookings.filter((booking) => booking.status === 'CONFIRMED').length;
-    const cancelledBookings = bookings.filter((booking) => booking.status === 'CANCELLED').length;
-    const pendingBookings = bookings.filter((booking) => booking.status === 'PENDING').length;
+    const confirmedBookings = bookings.filter(
+      (booking) => booking.status === 'CONFIRMED'
+    ).length;
+    const cancelledBookings = bookings.filter(
+      (booking) => booking.status === 'CANCELLED'
+    ).length;
+    const pendingBookings = bookings.filter(
+      (booking) => booking.status === 'PENDING'
+    ).length;
 
     const dailyBookings = groupCounts(bookings, formatDateKey);
     const weeklyBookings = groupCounts(bookings, getIsoWeekLabel);
     const monthlyBookings = groupCounts(bookings, formatMonthKey);
 
-    const totalRevenue = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
-    const paymentCount = payments.length;
-    const revenueByGateway = payments.reduce<Record<string, number>>((acc, payment) => {
-      acc[payment.gateway] = (acc[payment.gateway] || 0) + Number(payment.amount);
-      return acc;
-    }, {});
+    const totalRevenue = revenueRows.reduce((sum, row) => sum + Number(row.amount), 0);
+    const paymentCount = revenueRows.length;
+    const revenueByGateway = getRevenueByChannel(revenueRows);
 
-    const confirmedBookingsList = bookings.filter((booking) => booking.status === 'CONFIRMED');
+    const confirmedBookingsList = bookings.filter(
+      (booking) => booking.status === 'CONFIRMED'
+    );
     const periodStart = new Date(period.start);
     periodStart.setHours(0, 0, 0, 0);
     const periodEnd = new Date(period.end);
@@ -210,19 +294,27 @@ export const getSummaryReport = async (req: Request, res: Response) => {
     const periodEndExclusive = new Date(periodEnd.getTime());
     periodEndExclusive.setDate(periodEndExclusive.getDate() + 1);
     const dayMs = 24 * 60 * 60 * 1000;
-    const daysInPeriod = Math.max(1, Math.round((periodEndExclusive.getTime() - periodStart.getTime()) / dayMs));
+    const daysInPeriod = Math.max(
+      1,
+      Math.round((periodEndExclusive.getTime() - periodStart.getTime()) / dayMs)
+    );
 
     const totalBookedNights = confirmedBookingsList.reduce((sum, booking) => {
       const checkIn = new Date(booking.checkIn);
       const checkOut = new Date(booking.checkOut);
       const overlapStart = checkIn > periodStart ? checkIn : periodStart;
       const overlapEnd = checkOut < periodEndExclusive ? checkOut : periodEndExclusive;
-      const nights = Math.max(0, Math.round((overlapEnd.getTime() - overlapStart.getTime()) / dayMs));
+      const nights = Math.max(
+        0,
+        Math.round((overlapEnd.getTime() - overlapStart.getTime()) / dayMs)
+      );
       return sum + nights;
     }, 0);
 
     const occupancyRate =
-      totalSuites > 0 ? Number(((totalBookedNights / (totalSuites * daysInPeriod)) * 100).toFixed(2)) : 0;
+      totalSuites > 0
+        ? Number(((totalBookedNights / (totalSuites * daysInPeriod)) * 100).toFixed(2))
+        : 0;
 
     const summary = {
       bookings: {
@@ -238,6 +330,17 @@ export const getSummaryReport = async (req: Request, res: Response) => {
         totalRevenue,
         paymentCount,
         byGateway: revenueByGateway,
+        sources: {
+          gatewayPayments: revenueRows
+            .filter((row) => row.source === 'gateway_payment')
+            .reduce((sum, row) => sum + row.amount, 0),
+          manualBookings: revenueRows
+            .filter((row) => row.source === 'manual_booking')
+            .reduce((sum, row) => sum + row.amount, 0),
+          restaurantOrders: revenueRows
+            .filter((row) => row.source === 'restaurant_order')
+            .reduce((sum, row) => sum + row.amount, 0),
+        },
       },
       occupancy: {
         totalSuites,
@@ -267,7 +370,9 @@ const toCsv = (rows: Record<string, unknown>[]) => {
   };
   const lines = [
     headers.join(','),
-    ...rows.map((row) => headers.map((header) => escapeValue(row[header])).join(',')),
+    ...rows.map((row) =>
+      headers.map((header) => escapeValue(row[header])).join(',')
+    ),
   ];
   return lines.join('\n');
 };
@@ -288,9 +393,7 @@ export const exportReport = async (req: Request, res: Response) => {
     if (type === 'bookings') {
       const bookings = await Booking.findAll({
         where: {
-          createdAt: {
-            [Op.between]: [period.start, period.end],
-          },
+          createdAt: withinRange(period),
         },
       });
       data = bookings.map((booking) => ({
@@ -304,34 +407,28 @@ export const exportReport = async (req: Request, res: Response) => {
         totalAmount: Number(booking.totalAmount),
         status: booking.status,
         paymentStatus: booking.paymentStatus,
+        paymentMethod: booking.paymentMethod,
+        manualBooking: booking.manualBooking,
         createdAt: booking.createdAt,
       }));
     } else if (type === 'revenue') {
-      const payments = await Payment.findAll({
-        where: {
-          status: 'PAID',
-          createdAt: {
-            [Op.between]: [period.start, period.end],
-          },
-        },
-      });
-      data = payments.map((payment) => ({
-        id: payment.id,
-        bookingId: payment.bookingId,
-        amount: Number(payment.amount),
-        gateway: payment.gateway,
-        status: payment.status,
-        reference: payment.reference,
-        createdAt: payment.createdAt,
+      const revenueRows = await getRevenueRows(period);
+      data = revenueRows.map((row) => ({
+        id: row.id,
+        source: row.source,
+        bookingId: row.bookingId,
+        amount: Number(row.amount),
+        channel: row.channel,
+        status: row.status,
+        reference: row.reference,
+        createdAt: row.createdAt,
       }));
     } else if (type === 'occupancy') {
       const [totalSuites, bookings] = await Promise.all([
         Suite.count(),
         Booking.count({
           where: {
-            createdAt: {
-              [Op.between]: [period.start, period.end],
-            },
+            createdAt: withinRange(period),
           },
         }),
       ]);
@@ -340,19 +437,23 @@ export const exportReport = async (req: Request, res: Response) => {
           totalSuites,
           totalBookings: bookings,
           occupancyRate:
-            totalSuites > 0 ? Number(((bookings / totalSuites) * 100).toFixed(2)) : 0,
+            totalSuites > 0
+              ? Number(((bookings / totalSuites) * 100).toFixed(2))
+              : 0,
         },
       ];
     } else if (type === 'summary') {
-      const summaryResponse = await new Promise<Record<string, unknown>>((resolve, reject) => {
-        const fakeRes = {
-          json: (payload: any) => resolve(payload.data),
-          status: () => ({
-            json: (payload: any) => reject(new Error(payload.error)),
-          }),
-        } as unknown as Response;
-        getSummaryReport(req, fakeRes).catch(reject);
-      });
+      const summaryResponse = await new Promise<Record<string, unknown>>(
+        (resolve, reject) => {
+          const fakeRes = {
+            json: (payload: any) => resolve(payload.data),
+            status: () => ({
+              json: (payload: any) => reject(new Error(payload.error)),
+            }),
+          } as unknown as Response;
+          getSummaryReport(req, fakeRes).catch(reject);
+        }
+      );
 
       summary = summaryResponse as any;
       data = [
@@ -388,30 +489,42 @@ export const exportReport = async (req: Request, res: Response) => {
           '',
           'Daily Booking Summary',
           'Date,Bookings',
-          ...(summary.bookings?.daily || []).map((row: any) => `${row.period},${row.total}`),
+          ...(summary.bookings?.daily || []).map(
+            (row: any) => `${row.period},${row.total}`
+          ),
           '',
           'Weekly Booking Summary',
           'Week,Bookings',
-          ...(summary.bookings?.weekly || []).map((row: any) => `${row.period},${row.total}`),
+          ...(summary.bookings?.weekly || []).map(
+            (row: any) => `${row.period},${row.total}`
+          ),
           '',
           'Monthly Booking Summary',
           'Month,Bookings',
-          ...(summary.bookings?.monthly || []).map((row: any) => `${row.period},${row.total}`),
+          ...(summary.bookings?.monthly || []).map(
+            (row: any) => `${row.period},${row.total}`
+          ),
           '',
-          'Revenue by Gateway',
-          'Gateway,Amount',
+          'Revenue by Channel',
+          'Channel,Amount',
           ...Object.entries(summary.revenue?.byGateway || {}).map(
-            ([gateway, amount]) => `${gateway},${amount}`
+            ([channel, amount]) => `${channel},${amount}`
           ),
         ];
         res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', 'attachment; filename="summary-report.csv"');
+        res.setHeader(
+          'Content-Disposition',
+          'attachment; filename="summary-report.csv"'
+        );
         return res.send(summaryLines.join('\n'));
       }
 
       const csv = toCsv(data);
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename="${type}-report.csv"`);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${type}-report.csv"`
+      );
       return res.send(csv);
     }
 
@@ -436,20 +549,26 @@ export const exportReport = async (req: Request, res: Response) => {
         },
         {
           title: 'Daily Booking Summary',
-          lines: (summary.bookings?.daily || []).map((row: any) => `${row.period}: ${row.total}`),
+          lines: (summary.bookings?.daily || []).map(
+            (row: any) => `${row.period}: ${row.total}`
+          ),
         },
         {
           title: 'Weekly Booking Summary',
-          lines: (summary.bookings?.weekly || []).map((row: any) => `${row.period}: ${row.total}`),
+          lines: (summary.bookings?.weekly || []).map(
+            (row: any) => `${row.period}: ${row.total}`
+          ),
         },
         {
           title: 'Monthly Booking Summary',
-          lines: (summary.bookings?.monthly || []).map((row: any) => `${row.period}: ${row.total}`),
+          lines: (summary.bookings?.monthly || []).map(
+            (row: any) => `${row.period}: ${row.total}`
+          ),
         },
         {
-          title: 'Revenue by Gateway',
+          title: 'Revenue by Channel',
           lines: Object.entries(summary.revenue?.byGateway || {}).map(
-            ([gateway, amount]) => `${gateway}: ₦${amount}`
+            ([channel, amount]) => `${channel}: ₦${amount}`
           ),
         },
       ];
@@ -465,7 +584,10 @@ export const exportReport = async (req: Request, res: Response) => {
     const pdf = await buildPdfBuffer(sectionTitle, periodLabel, sections);
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${type}-report.pdf"`);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${type}-report.pdf"`
+    );
     return res.send(pdf);
   } catch (_error) {
     return res.status(500).json({ error: 'Error exporting report' });

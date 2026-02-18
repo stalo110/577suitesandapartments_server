@@ -6,6 +6,7 @@ import logger from "morgan";
 import createError from "http-errors";
 import { connectDB, sequelize } from "./db";
 import { ensureDemoUsers } from "./models/UserModel";
+import "./events/registerPaymentListeners";
 
 import AuthRouter from "./routes/authRoutes";
 import SuitesRouter from "./routes/suitesRoutes";
@@ -18,6 +19,13 @@ import AdminContactRouter from "./routes/adminContactRoutes";
 import GalleryRouter from "./routes/galleryRoutes";
 import AdminGalleryRouter from "./routes/adminGalleryRoutes";
 import ReportsRouter from "./routes/reportsRoutes";
+import WebhookRouter from "./routes/webhookRoutes";
+import RestaurantOrderRouter from "./routes/restaurantOrderRoutes";
+import PromotionRouter from "./routes/promotionRoutes";
+import TeamRouter from "./routes/teamRoutes";
+import GoogleReviewsRouter from "./routes/googleReviewsRoutes";
+import AdminUserRouter from "./routes/adminUserRoutes";
+import { ensureDefaultRolesAndPermissions } from "./services/rbacService";
 
 dotenv.config();
 
@@ -50,7 +58,13 @@ const corsOptions: CorsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 app.use(logger("dev"));
-app.use(express.json());
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      (req as any).rawBody = buf.toString();
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
@@ -74,6 +88,12 @@ app.use(AdminContactRouter);
 app.use(GalleryRouter);
 app.use(AdminGalleryRouter);
 app.use(ReportsRouter);
+app.use(WebhookRouter);
+app.use(RestaurantOrderRouter);
+app.use(PromotionRouter);
+app.use(TeamRouter);
+app.use(GoogleReviewsRouter);
+app.use(AdminUserRouter);
 
 app.use((req: Request, _res: Response, next: NextFunction) => {
   next(createError(404, "Not Found"));
@@ -97,6 +117,7 @@ const startServer = async () => {
   if (shouldSeedDemoUsers) {
     await ensureDemoUsers();
   }
+  await ensureDefaultRolesAndPermissions();
 
   console.log("Database connected");
   app.listen(PORT, () => {

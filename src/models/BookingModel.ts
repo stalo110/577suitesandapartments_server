@@ -18,6 +18,9 @@ export class Booking extends Model<InferAttributes<Booking>, InferCreationAttrib
   declare numberOfGuests: number;
   declare status: CreationOptional<'PENDING' | 'CONFIRMED' | 'CANCELLED'>;
   declare paymentStatus: CreationOptional<'UNPAID' | 'PAID'>;
+  declare paymentMethod: CreationOptional<'pending' | 'cash' | 'transfer' | 'card'>;
+  declare manualBooking: CreationOptional<boolean>;
+  declare notes: CreationOptional<string | null>;
   declare bookingReference: string;
   declare suite?: Suite;
   declare createdAt: CreationOptional<Date>;
@@ -96,6 +99,21 @@ Booking.init(
       type: DataTypes.ENUM('UNPAID', 'PAID'),
       allowNull: false,
       defaultValue: 'UNPAID',
+    },
+    paymentMethod: {
+      type: DataTypes.ENUM('pending', 'cash', 'transfer', 'card'),
+      allowNull: false,
+      defaultValue: 'pending',
+    },
+    manualBooking: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    notes: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      defaultValue: null,
     },
     bookingReference: {
       type: DataTypes.STRING(60),

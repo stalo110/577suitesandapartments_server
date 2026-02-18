@@ -1,15 +1,68 @@
 import PDFDocument from 'pdfkit';
 import { PNG } from 'pngjs';
 import { Request, Response } from 'express';
+import type { ParsedQs } from 'qs';
 import { Payment } from '../models/PaymentModel';
+import { Transaction } from '../models/TransactionModel';
 import { Booking } from '../models/BookingModel';
 import { Suite } from '../models/SuiteModel';
-import {
-  sendAdminPaymentNotification,
-  sendPaymentConfirmationEmail,
-} from '../utils/mailer';
+import { User } from '../models/UserModel';
+import PaymentDispatcher from '../services/PaymentDispatcher';
+import { logPayment, logPaymentError } from '../utils/paymentLogger';
 
 const formatCurrency = (value: number) => `₦${Number(value).toLocaleString()}`;
+
+const dispatcher = new PaymentDispatcher();
+
+const normalizeGateway = (gateway?: string, reference?: string) => {
+  const normalized = gateway?.toLowerCase();
+  if (normalized === 'paystack' || normalized === 'flutterwave') {
+    return normalized;
+  }
+  if (reference?.startsWith('PAY-')) {
+    return 'paystack';
+  }
+  if (reference?.startsWith('FLW-')) {
+    return 'flutterwave';
+  }
+  return null;
+};
+
+const toPaymentGateway = (gateway: 'paystack' | 'flutterwave') =>
+  gateway === 'paystack' ? 'PAYSTACK' : 'FLUTTERWAVE';
+
+const normalizeGatewayValue = (gateway: string | string[]): string => {
+  if (Array.isArray(gateway)) {
+    return gateway[0] || '';
+  }
+  return gateway;
+};
+
+const normalizeQueryParam = (
+  value?: string | string[] | ParsedQs | (string | ParsedQs)[]
+): string => {
+  if (Array.isArray(value)) {
+    const first = value[0];
+    return typeof first === 'string' ? first : '';
+  }
+  return typeof value === 'string' ? value : '';
+};
+
+const buildCallbackBaseUrl = (req: Request) => {
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const proto = Array.isArray(forwardedProto)
+    ? forwardedProto[0]
+    : forwardedProto || req.protocol;
+  return `${proto}://${req.get('host')}`;
+};
+
+const mergePaymentDetails = (
+  existing: Record<string, unknown> | null | undefined,
+  next: Record<string, unknown>
+) => ({
+  ...(existing || {}),
+  ...next,
+});
 
 const FONT_5X7: Record<string, string[]> = {
   ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
@@ -229,10 +282,15 @@ const buildReceiptPng = async (data: {
 
 export const initializePayment = async (req: Request, res: Response) => {
   try {
-    const { bookingId, amount, gateway } = req.body;
+    const { bookingId, amount, gateway, email } = req.body;
     const parsedBookingId = Number(bookingId);
 
-    if (!['PAYSTACK', 'FLUTTERWAVE'].includes(gateway)) {
+    if (!parsedBookingId || Number.isNaN(parsedBookingId)) {
+      return res.status(400).json({ error: 'Invalid bookingId' });
+    }
+
+    const normalizedGateway = normalizeGateway(gateway);
+    if (!normalizedGateway) {
       return res.status(400).json({ error: 'Unsupported payment gateway' });
     }
 
@@ -241,88 +299,216 @@ export const initializePayment = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Booking not found' });
     }
 
-    const reference = `PAY${Date.now()}${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
-    const transactionId = `${gateway}-${Date.now()}`;
+    const customerEmail = email || booking.email;
+    if (!customerEmail) {
+      return res.status(400).json({ error: 'Customer email is required' });
+    }
 
+    const totalAmount = Number(booking.totalAmount);
+    if (amount && Number(amount) !== totalAmount) {
+      await logPaymentError('payment.amount.mismatch', {
+        bookingId: parsedBookingId,
+        expectedAmount: totalAmount,
+        providedAmount: Number(amount),
+      });
+    }
+
+    await logPayment('payment.initialize.start', {
+      bookingId: parsedBookingId,
+      gateway: normalizedGateway,
+      email: customerEmail,
+    });
+
+    const callbackBaseUrl = buildCallbackBaseUrl(req);
+    const result = await dispatcher.initiate(
+      booking,
+      normalizedGateway,
+      customerEmail,
+      callbackBaseUrl
+    );
+
+    const paymentGateway = toPaymentGateway(normalizedGateway);
     const payment = await Payment.create({
       bookingId: parsedBookingId,
-      amount,
-      gateway,
-      reference,
-      transactionId,
+      amount: totalAmount,
+      gateway: paymentGateway,
+      reference: result.reference,
+      transactionId: `${paymentGateway}-${Date.now()}`,
       status: 'PENDING',
       paymentDetails: {
-        providerReference: reference,
-        checkoutUrl: `${process.env.PUBLIC_CLIENT_URL || 'http://localhost:3039'}/checkout`,
+        initialization: result,
       },
+    });
+
+    await logPayment('payment.initialize.success', {
+      bookingId: parsedBookingId,
+      gateway: normalizedGateway,
+      reference: result.reference,
     });
 
     return res.status(201).json({
       id: String(payment.id),
-      reference,
-      transactionId,
+      reference: result.reference,
+      transactionId: payment.transactionId,
       amount: Number(payment.amount),
-      gateway,
-      checkoutUrl: (payment.paymentDetails as Record<string, unknown>)?.checkoutUrl,
+      gateway: payment.gateway,
+      authorization_url: (result as { authorization_url?: string }).authorization_url,
+      link: (result as { link?: string }).link,
     });
-  } catch (_error) {
-    return res.status(400).json({ error: 'Error initializing payment' });
+  } catch (error: any) {
+    await logPaymentError('payment.initialize.error', { error: error.message });
+    const message = error?.message || 'Error initializing payment';
+    const status = message.toLowerCase().includes('timeout') ? 504 : 400;
+    return res.status(status).json({ error: message });
   }
 };
 
 export const verifyPayment = async (req: Request, res: Response) => {
   try {
-    const { reference } = req.body;
+    const { reference: rawReference, tx_ref: txRef, trxref, gateway } = req.body;
+    const reference = String(rawReference || txRef || trxref || '');
 
-    const payment = await Payment.findOne({ where: { reference } });
-    if (!payment) {
-      return res.status(404).json({ error: 'Payment not found' });
+    if (!reference) {
+      return res.status(400).json({ error: 'Reference is required' });
     }
 
-    await payment.update({ status: 'PAID' });
-    await Booking.update(
-      { status: 'CONFIRMED', paymentStatus: 'PAID' },
-      { where: { id: Number(payment.bookingId) } }
-    );
+    const normalizedGateway = normalizeGateway(gateway, reference);
+    if (!normalizedGateway) {
+      return res.status(400).json({ error: 'Unsupported payment gateway' });
+    }
 
-    const booking = await Booking.findByPk(payment.bookingId, {
-      include: [{ model: Suite, as: 'suite' }],
-    });
-    const suite = booking?.suite;
-    if (booking && suite) {
-      try {
-        await Promise.all([
-          sendPaymentConfirmationEmail(
-            booking.email,
-            booking.guestName,
-            suite.name,
-            Number(payment.amount),
-            payment.reference
-          ),
-          sendAdminPaymentNotification(
-            booking.guestName,
-            booking.email,
-            suite.name,
-            Number(payment.amount),
-            payment.reference
-          ),
-        ]);
-      } catch (emailError) {
-        console.error('Failed to send payment emails:', emailError);
-      }
+    await logPayment('payment.verify.start', { reference, gateway: normalizedGateway });
+
+    const result = await dispatcher.verify(reference, normalizedGateway);
+    const payment = await Payment.findOne({ where: { reference } });
+
+    if (payment) {
+      await payment.update({
+        status: result.success ? 'PAID' : 'FAILED',
+        gateway: toPaymentGateway(normalizedGateway),
+        paymentDetails: mergePaymentDetails(payment.paymentDetails as Record<string, unknown>, {
+          verification: result.gateway_response,
+        }),
+      });
     }
 
     return res.json({
-      id: String(payment.id),
-      bookingId: String(payment.bookingId),
-      amount: Number(payment.amount),
-      gateway: payment.gateway,
-      status: payment.status,
-      reference: payment.reference,
-      createdAt: payment.createdAt,
+      id: payment ? String(payment.id) : '',
+      bookingId: payment ? String(payment.bookingId) : '',
+      amount: payment ? Number(payment.amount) : 0,
+      gateway: payment ? payment.gateway : toPaymentGateway(normalizedGateway),
+      status: payment ? payment.status : result.success ? 'PAID' : 'FAILED',
+      reference,
+      createdAt: payment?.createdAt,
     });
-  } catch (_error) {
-    return res.status(400).json({ error: 'Error verifying payment' });
+  } catch (error: any) {
+    await logPaymentError('payment.verify.error', {
+      reference: req.body.reference,
+      error: error.message,
+    });
+    const message = error?.message || 'Error verifying payment';
+    const status = message.toLowerCase().includes('timeout') ? 504 : 400;
+    return res.status(status).json({ error: message });
+  }
+};
+
+export const verifyPaymentRedirect = async (req: Request, res: Response) => {
+  const reference =
+    normalizeQueryParam(req.query.reference) ||
+    normalizeQueryParam(req.query.tx_ref) ||
+    normalizeQueryParam(req.query.trxref);
+  const gateway = normalizeQueryParam(req.query.gateway);
+
+  if (!reference) {
+    return res.status(400).json({ error: 'Reference is required' });
+  }
+
+  const normalizedGateway = normalizeGateway(gateway, reference);
+  const frontendBase = process.env.PUBLIC_CLIENT_URL || 'http://localhost:3039';
+
+  if (!normalizedGateway) {
+    return res.redirect(`${frontendBase}/order/failed?ref=${reference}`);
+  }
+
+  try {
+    const result = await dispatcher.verify(reference, normalizedGateway);
+    const payment = await Payment.findOne({ where: { reference } });
+
+    if (payment) {
+      await payment.update({
+        status: result.success ? 'PAID' : 'FAILED',
+        gateway: toPaymentGateway(normalizedGateway),
+        paymentDetails: mergePaymentDetails(payment.paymentDetails as Record<string, unknown>, {
+          verification: result.gateway_response,
+        }),
+      });
+    }
+
+    const redirectPath = result.success ? 'order/success' : 'order/failed';
+    return res.redirect(`${frontendBase}/${redirectPath}?ref=${reference}&gateway=${normalizedGateway}`);
+  } catch (error: any) {
+    await logPaymentError('payment.verify.redirect_error', {
+      reference,
+      error: error.message,
+    });
+    return res.redirect(`${frontendBase}/order/failed?ref=${reference}&gateway=${normalizedGateway}`);
+  }
+};
+
+export const getPaymentConfig = async (_req: Request, res: Response) => {
+  return res.json({
+    paystackPublicKey: process.env.PAYSTACK_PUBLIC_KEY || '',
+    flutterwavePublicKey: process.env.FLUTTERWAVE_PUBLIC_KEY || '',
+  });
+};
+
+export const getTransactionByReference = async (req: Request, res: Response) => {
+  try {
+    const reference = String(req.params.reference);
+    const transaction = await Transaction.findOne({
+      where: { reference },
+      include: [
+        { model: Booking, as: 'booking' },
+        { model: User, as: 'user', attributes: ['id', 'email', 'role'] },
+      ],
+    });
+
+    if (!transaction) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
+
+    let gatewayStatus: unknown = null;
+    if (req.query.fresh === 'true') {
+      try {
+        const result = await dispatcher.verify(
+          reference,
+          normalizeGatewayValue(transaction.gateway)
+        );
+        gatewayStatus = result.gateway_response;
+      } catch (error: any) {
+        await logPaymentError('transaction.lookup.fresh_failed', {
+          reference,
+          error: error.message,
+        });
+      }
+    }
+
+    const payment = await Payment.findOne({ where: { reference } });
+
+    return res.json({
+      success: true,
+      data: {
+        transaction: transaction.toJSON(),
+        payment: payment ? payment.toJSON() : null,
+        gateway_fresh_status: gatewayStatus,
+      },
+    });
+  } catch (error: any) {
+    await logPaymentError('transaction.lookup.error', {
+      reference: req.params.reference,
+      error: error.message,
+    });
+    return res.status(500).json({ error: 'Failed to fetch transaction' });
   }
 };
 

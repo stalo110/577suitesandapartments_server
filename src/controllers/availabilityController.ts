@@ -1,5 +1,6 @@
 import { Op } from 'sequelize';
 import { Request, Response } from 'express';
+import { getActivePromotionsForSuites } from '../utils/promotionUtils';
 import { Suite } from '../models/SuiteModel';
 import { Booking } from '../models/BookingModel';
 
@@ -71,7 +72,26 @@ export const checkAvailability = async (req: Request, res: Response) => {
       order: [['createdAt', 'DESC']],
     });
 
-    return res.json({ available: suites.map(serializeSuite), total: suites.length });
+    const serialized = suites.map(serializeSuite);
+    const promotionsMap = await getActivePromotionsForSuites(
+      serialized.map((suite) => ({
+        id: Number(suite.id),
+        type: suite.type,
+        price: suite.price,
+      }))
+    );
+
+    const available = serialized.map((suite) => {
+      const promotion = promotionsMap.get(Number(suite.id));
+      return {
+        ...suite,
+        promotion: promotion || null,
+        discountedPrice: promotion ? promotion.discountedPrice : null,
+        effectivePrice: promotion ? promotion.discountedPrice : suite.price,
+      };
+    });
+
+    return res.json({ available, total: available.length });
   } catch (_error) {
     return res.status(500).json({ error: 'Error checking availability' });
   }

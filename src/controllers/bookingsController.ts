@@ -17,16 +17,33 @@ const toBookingResponse = (booking: Booking) => ({
   checkOut: booking.checkOut,
   totalAmount: Number(booking.totalAmount),
   numberOfGuests: booking.numberOfGuests,
-  mealOrderName: booking.mealOrderName,
-  mealOrderAmount: Number(booking.mealOrderAmount),
-  otherOrderName: booking.otherOrderName,
-  otherOrderAmount: Number(booking.otherOrderAmount),
   status: booking.status,
   paymentStatus: booking.paymentStatus,
+  paymentMethod: booking.paymentMethod,
+  manualBooking: booking.manualBooking,
+  notes: booking.notes,
   bookingReference: booking.bookingReference,
   createdAt: booking.createdAt,
   updatedAt: booking.updatedAt,
 });
+
+const bookingOverlaps = async (suiteId: number, checkIn: string, checkOut: string, exceptId?: number) => {
+  const where: Record<string, unknown> = {
+    suiteId,
+    status: { [Op.ne]: 'CANCELLED' },
+    checkIn: { [Op.lt]: checkOut },
+    checkOut: { [Op.gt]: checkIn },
+  };
+
+  if (exceptId) {
+    where.id = { [Op.ne]: exceptId };
+  }
+
+  return Booking.findOne({ where });
+};
+
+const generateBookingReference = () =>
+  `BK${Date.now()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 
 export const createBooking = async (req: Request, res: Response) => {
   try {
@@ -39,33 +56,23 @@ export const createBooking = async (req: Request, res: Response) => {
       checkOut,
       totalAmount,
       numberOfGuests,
-      mealOrderName,
-      mealOrderAmount,
-      otherOrderName,
-      otherOrderAmount,
     } = req.body;
 
     const parsedSuiteId = Number(suiteId);
+
+    if (!parsedSuiteId || !guestName || !email || !phone || !checkIn || !checkOut) {
+      return res.status(400).json({ error: 'Missing required booking fields' });
+    }
 
     const suite = await Suite.findByPk(parsedSuiteId);
     if (!suite || !suite.isAvailable) {
       return res.status(400).json({ error: 'Selected suite is not available' });
     }
 
-    const overlappingBooking = await Booking.findOne({
-      where: {
-        suiteId: parsedSuiteId,
-        status: { [Op.ne]: 'CANCELLED' },
-        checkIn: { [Op.lt]: checkOut },
-        checkOut: { [Op.gt]: checkIn },
-      },
-    });
-
+    const overlappingBooking = await bookingOverlaps(parsedSuiteId, checkIn, checkOut);
     if (overlappingBooking) {
       return res.status(409).json({ error: 'Suite already booked for selected dates' });
     }
-
-    const bookingReference = `BK${Date.now()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 
     const booking = await Booking.create({
       suiteId: parsedSuiteId,
@@ -76,32 +83,30 @@ export const createBooking = async (req: Request, res: Response) => {
       checkOut,
       totalAmount,
       numberOfGuests,
-      mealOrderName,
-      mealOrderAmount,
-      otherOrderName,
-      otherOrderAmount,
-      bookingReference,
+      bookingReference: generateBookingReference(),
+      paymentMethod: 'pending',
+      manualBooking: false,
     });
 
     try {
       await Promise.all([
         sendBookingConfirmationEmail(
           email,
-          bookingReference,
+          booking.bookingReference,
           guestName,
           suite.name,
           checkIn,
           checkOut,
-          totalAmount
+          Number(totalAmount)
         ),
         sendAdminBookingNotification(
-          bookingReference,
+          booking.bookingReference,
           suite.name,
           guestName,
           email,
           checkIn,
           checkOut,
-          totalAmount
+          Number(totalAmount)
         ),
       ]);
     } catch (emailError) {
@@ -111,6 +116,88 @@ export const createBooking = async (req: Request, res: Response) => {
     return res.status(201).json(toBookingResponse(booking));
   } catch (_error) {
     return res.status(400).json({ error: 'Error creating booking' });
+  }
+};
+
+export const createAdminBooking = async (req: Request, res: Response) => {
+  try {
+    const {
+      suiteId,
+      guestName,
+      email,
+      phone,
+      checkIn,
+      checkOut,
+      totalAmount,
+      numberOfGuests,
+      paymentMethod,
+      notes,
+    } = req.body;
+
+    const parsedSuiteId = Number(suiteId);
+    const guestCount = Math.max(1, Number(numberOfGuests || 1));
+
+    if (!parsedSuiteId || !guestName || !email || !phone || !checkIn || !checkOut) {
+      return res.status(400).json({ error: 'Missing required booking fields' });
+    }
+
+    const suite = await Suite.findByPk(parsedSuiteId);
+    if (!suite || !suite.isAvailable) {
+      return res.status(400).json({ error: 'Selected suite is not available' });
+    }
+
+    const overlappingBooking = await bookingOverlaps(parsedSuiteId, checkIn, checkOut);
+    if (overlappingBooking) {
+      return res.status(409).json({ error: 'Suite already booked for selected dates' });
+    }
+
+    const checkInDate = new Date(checkIn);
+    const checkOutDate = new Date(checkOut);
+    if (
+      Number.isNaN(checkInDate.getTime()) ||
+      Number.isNaN(checkOutDate.getTime()) ||
+      checkOutDate <= checkInDate
+    ) {
+      return res.status(400).json({ error: 'Invalid check-in/check-out dates' });
+    }
+    const nights = Math.max(
+      1,
+      Math.round((checkOutDate.getTime() - checkInDate.getTime()) / (24 * 60 * 60 * 1000))
+    );
+    const defaultTotal = Number(suite.price) * nights;
+
+    const normalizedPaymentMethod =
+      String(paymentMethod || 'cash').toLowerCase() === 'transfer'
+        ? 'transfer'
+        : String(paymentMethod || 'cash').toLowerCase() === 'card'
+          ? 'card'
+          : String(paymentMethod || 'cash').toLowerCase() === 'pending'
+            ? 'pending'
+            : 'cash';
+
+    const isImmediatePayment =
+      normalizedPaymentMethod === 'cash' || normalizedPaymentMethod === 'transfer';
+
+    const booking = await Booking.create({
+      suiteId: parsedSuiteId,
+      guestName,
+      email,
+      phone,
+      checkIn,
+      checkOut,
+      totalAmount: Number(totalAmount || defaultTotal),
+      numberOfGuests: guestCount,
+      bookingReference: generateBookingReference(),
+      paymentMethod: normalizedPaymentMethod,
+      paymentStatus: isImmediatePayment ? 'PAID' : 'UNPAID',
+      status: isImmediatePayment ? 'CONFIRMED' : 'PENDING',
+      manualBooking: true,
+      notes: notes ? String(notes) : null,
+    });
+
+    return res.status(201).json(toBookingResponse(booking));
+  } catch (_error) {
+    return res.status(400).json({ error: 'Error creating admin booking' });
   }
 };
 

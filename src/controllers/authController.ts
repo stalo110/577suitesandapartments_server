@@ -3,22 +3,45 @@ import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { User, verifyPassword, hashPassword } from '../models/UserModel';
+import { getUserPermissionNames, getUserRoleNames, resolvePrimaryRoleName } from '../services/rbacService';
 import { sendAdminPasswordResetEmail } from '../utils/mailer';
 
 dotenv.config();
 
 const jwtsecret = process.env.JWT_SECRET || 'dev-secret';
 
-const signToken = (payload: Record<string, unknown>) => jwt.sign(payload, jwtsecret, { expiresIn: '7d' });
+const signToken = (payload: Record<string, unknown>) =>
+  jwt.sign(payload, jwtsecret, { expiresIn: '7d' });
 
-const buildResponse = (user: User) => ({
-  token: signToken({ id: user.id, email: user.email, role: user.role }),
-  user: {
-    id: String(user.id),
+const buildResponse = async (user: User) => {
+  const roleNames = user.role === 'ADMIN' ? await getUserRoleNames(user.id) : [];
+  const permissionNames =
+    user.role === 'ADMIN' ? await getUserPermissionNames(user.id) : [];
+  const primaryRole = resolvePrimaryRoleName(roleNames);
+
+  const payload = {
+    id: user.id,
     email: user.email,
     role: user.role,
-  },
-});
+    roles: roleNames,
+    permissions: permissionNames,
+    primaryRole,
+  };
+
+  return {
+    token: signToken(payload),
+    user: {
+      id: String(user.id),
+      email: user.email,
+      role: user.role,
+      roles: roleNames,
+      primaryRole,
+      permissions: permissionNames,
+      isActive: user.isActive,
+      lastLoginAt: user.lastLoginAt,
+    },
+  };
+};
 
 const validateCredentials = async (email: string, password: string, role: 'ADMIN' | 'GUEST') => {
   if (!email || !password) {
@@ -30,10 +53,17 @@ const validateCredentials = async (email: string, password: string, role: 'ADMIN
     throw new Error('Invalid email or password');
   }
 
+  if (!user.isActive) {
+    throw new Error('Your account is inactive');
+  }
+
   const isValid = await verifyPassword(password, user.passwordHash);
   if (!isValid) {
     throw new Error('Invalid email or password');
   }
+
+  user.lastLoginAt = new Date();
+  await user.save();
 
   return buildResponse(user);
 };
@@ -77,7 +107,7 @@ export const guestRegister = async (req: Request, res: Response) => {
     role: 'GUEST',
   });
 
-  return res.status(201).json(buildResponse(user));
+  return res.status(201).json(await buildResponse(user));
 };
 
 export const requestAdminPasswordReset = async (req: Request, res: Response) => {

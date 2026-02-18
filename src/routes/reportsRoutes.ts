@@ -6,14 +6,14 @@ import {
   getRevenueReports,
   getSummaryReport,
 } from '../controllers/reportsController';
-import { authenticate, authorizeRoles } from '../middleware/auth';
+import { authenticate, authorizePermission } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/admin/reports/bookings', authenticate, authorizeRoles('ADMIN'), getBookingReports);
-router.get('/admin/reports/revenue', authenticate, authorizeRoles('ADMIN'), getRevenueReports);
-router.get('/admin/reports/occupancy', authenticate, authorizeRoles('ADMIN'), getOccupancyReports);
-router.get('/admin/reports/summary', authenticate, authorizeRoles('ADMIN'), getSummaryReport);
-router.get('/admin/reports/:type/export', authenticate, authorizeRoles('ADMIN'), exportReport);
+router.get('/admin/reports/bookings', authenticate, authorizePermission('view_reports'), getBookingReports);
+router.get('/admin/reports/revenue', authenticate, authorizePermission('view_reports'), getRevenueReports);
+router.get('/admin/reports/occupancy', authenticate, authorizePermission('view_reports'), getOccupancyReports);
+router.get('/admin/reports/summary', authenticate, authorizePermission('view_reports'), getSummaryReport);
+router.get('/admin/reports/:type/export', authenticate, authorizePermission('view_reports'), exportReport);
 
 export default router;

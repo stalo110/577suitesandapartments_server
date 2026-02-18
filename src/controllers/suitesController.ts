@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { getActivePromotionsForSuites } from '../utils/promotionUtils';
 import { Suite } from '../models/SuiteModel';
 
 const parseStringArray = (value: unknown): string[] => {
@@ -58,10 +59,31 @@ const serializeSuite = (suite: Suite) => ({
   updatedAt: suite.updatedAt,
 });
 
+const serializeSuitesWithPromotions = async (suites: Suite[]) => {
+  const base = suites.map(serializeSuite);
+  const promotionsMap = await getActivePromotionsForSuites(
+    base.map((suite) => ({
+      id: Number(suite.id),
+      type: suite.type,
+      price: suite.price,
+    }))
+  );
+
+  return base.map((suite) => {
+    const promotion = promotionsMap.get(Number(suite.id));
+    return {
+      ...suite,
+      promotion: promotion || null,
+      discountedPrice: promotion ? promotion.discountedPrice : null,
+      effectivePrice: promotion ? promotion.discountedPrice : suite.price,
+    };
+  });
+};
+
 export const getSuites = async (_req: Request, res: Response) => {
   try {
     const suites = await Suite.findAll({ order: [['createdAt', 'DESC']] });
-    return res.json(suites.map(serializeSuite));
+    return res.json(await serializeSuitesWithPromotions(suites));
   } catch (_error) {
     return res.status(500).json({ error: 'Error fetching suites' });
   }
@@ -74,7 +96,9 @@ export const getSuiteById = async (req: Request, res: Response) => {
     if (!suite) {
       return res.status(404).json({ error: 'Suite not found' });
     }
-    return res.json(serializeSuite(suite));
+
+    const [serialized] = await serializeSuitesWithPromotions([suite]);
+    return res.json(serialized);
   } catch (_error) {
     return res.status(500).json({ error: 'Error fetching suite' });
   }
@@ -97,7 +121,8 @@ export const createSuite = async (req: Request, res: Response) => {
     };
 
     const suite = await Suite.create(payload);
-    return res.status(201).json(serializeSuite(suite));
+    const [serialized] = await serializeSuitesWithPromotions([suite]);
+    return res.status(201).json(serialized);
   } catch (_error) {
     return res.status(400).json({ error: 'Error creating suite' });
   }
@@ -112,7 +137,10 @@ export const updateSuite = async (req: Request, res: Response) => {
     }
 
     const uploadedImages = extractUploadedImages(req.files as Express.Multer.File[]);
-    const existingImagesProvided = Object.prototype.hasOwnProperty.call(req.body, 'existingImages');
+    const existingImagesProvided = Object.prototype.hasOwnProperty.call(
+      req.body,
+      'existingImages'
+    );
     const existingImages = parseStringArray(req.body.existingImages);
     const baseImages = existingImagesProvided ? existingImages : suite.images || [];
     const amenitiesProvided = Object.prototype.hasOwnProperty.call(req.body, 'amenities');
@@ -120,13 +148,10 @@ export const updateSuite = async (req: Request, res: Response) => {
     const payload = {
       name: req.body.name ?? suite.name,
       type: req.body.type ?? suite.type,
-      price:
-        req.body.price !== undefined ? Number(req.body.price) : Number(suite.price),
+      price: req.body.price !== undefined ? Number(req.body.price) : Number(suite.price),
       description: req.body.description ?? suite.description,
       maxGuests:
-        req.body.maxGuests !== undefined
-          ? Number(req.body.maxGuests)
-          : suite.maxGuests,
+        req.body.maxGuests !== undefined ? Number(req.body.maxGuests) : suite.maxGuests,
       isAvailable:
         req.body.isAvailable !== undefined
           ? parseBoolean(req.body.isAvailable, suite.isAvailable ?? true)
@@ -136,7 +161,8 @@ export const updateSuite = async (req: Request, res: Response) => {
     };
 
     await suite.update(payload);
-    return res.json(serializeSuite(suite));
+    const [serialized] = await serializeSuitesWithPromotions([suite]);
+    return res.json(serialized);
   } catch (_error) {
     return res.status(400).json({ error: 'Error updating suite' });
   }

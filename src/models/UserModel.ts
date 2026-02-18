@@ -9,6 +9,8 @@ export class User extends Model<InferAttributes<User>, InferCreationAttributes<U
   declare email: string;
   declare passwordHash: string;
   declare role: UserRole;
+  declare isActive: CreationOptional<boolean>;
+  declare lastLoginAt: CreationOptional<Date | null>;
   declare resetTokenHash: CreationOptional<string | null>;
   declare resetTokenExpiresAt: CreationOptional<Date | null>;
   declare createdAt: CreationOptional<Date>;
@@ -35,6 +37,15 @@ User.init(
       type: DataTypes.ENUM('ADMIN', 'GUEST'),
       allowNull: false,
       defaultValue: 'GUEST',
+    },
+    isActive: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
+    lastLoginAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
     },
     resetTokenHash: {
       type: DataTypes.STRING(255),

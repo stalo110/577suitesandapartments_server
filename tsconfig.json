@@ -6,25 +6,12 @@
     "esModuleInterop": true,
     "moduleResolution": "NodeNext",
     "strict": true,
-    "rootDir": "src",  
+    "rootDir": "src",
     "outDir": "dist",
     "resolveJsonModule": true,
-    // "skipLibCheck": false,
-    "types": ["node"], 
-    "skipLibCheck": true  
+    "types": ["node"],
+    "skipLibCheck": true
   },
-  "include": [
-    "src/index.ts",
-    "src/db.ts",
-    "src/models/BookingModel.ts",
-    "src/models/PaymentModel.ts",
-    "src/models/SuiteModel.ts",
-    "src/routes/authRoutes.ts",
-    "src/routes/suitesRoutes.ts",
-    "src/routes/adminSuitesRoutes.ts",
-    "src/routes/availabilityRoutes.ts",
-    "src/routes/bookingsRoutes.ts",
-    "src/routes/paymentsRoutes.ts"
-  ],
+  "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

@@ -11,6 +11,7 @@ const morgan_1 = __importDefault(require("morgan"));
 const http_errors_1 = __importDefault(require("http-errors"));
 const db_1 = require("./db");
 const UserModel_1 = require("./models/UserModel");
+require("./events/registerPaymentListeners");
 const authRoutes_1 = __importDefault(require("./routes/authRoutes"));
 const suitesRoutes_1 = __importDefault(require("./routes/suitesRoutes"));
 const adminSuitesRoutes_1 = __importDefault(require("./routes/adminSuitesRoutes"));
@@ -22,6 +23,13 @@ const adminContactRoutes_1 = __importDefault(require("./routes/adminContactRoute
 const galleryRoutes_1 = __importDefault(require("./routes/galleryRoutes"));
 const adminGalleryRoutes_1 = __importDefault(require("./routes/adminGalleryRoutes"));
 const reportsRoutes_1 = __importDefault(require("./routes/reportsRoutes"));
+const webhookRoutes_1 = __importDefault(require("./routes/webhookRoutes"));
+const restaurantOrderRoutes_1 = __importDefault(require("./routes/restaurantOrderRoutes"));
+const promotionRoutes_1 = __importDefault(require("./routes/promotionRoutes"));
+const teamRoutes_1 = __importDefault(require("./routes/teamRoutes"));
+const googleReviewsRoutes_1 = __importDefault(require("./routes/googleReviewsRoutes"));
+const adminUserRoutes_1 = __importDefault(require("./routes/adminUserRoutes"));
+const rbacService_1 = require("./services/rbacService");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const allowedOrigins = [
@@ -49,7 +57,11 @@ const corsOptions = {
 app.use((0, cors_1.default)(corsOptions));
 app.options("*", (0, cors_1.default)(corsOptions));
 app.use((0, morgan_1.default)("dev"));
-app.use(express_1.default.json());
+app.use(express_1.default.json({
+    verify: (req, _res, buf) => {
+        req.rawBody = buf.toString();
+    },
+}));
 app.use(express_1.default.urlencoded({ extended: true }));
 app.use((0, cookie_parser_1.default)());
 app.get("/health", async (_req, res) => {
@@ -72,6 +84,12 @@ app.use(adminContactRoutes_1.default);
 app.use(galleryRoutes_1.default);
 app.use(adminGalleryRoutes_1.default);
 app.use(reportsRoutes_1.default);
+app.use(webhookRoutes_1.default);
+app.use(restaurantOrderRoutes_1.default);
+app.use(promotionRoutes_1.default);
+app.use(teamRoutes_1.default);
+app.use(googleReviewsRoutes_1.default);
+app.use(adminUserRoutes_1.default);
 app.use((req, _res, next) => {
     next((0, http_errors_1.default)(404, "Not Found"));
 });
@@ -89,6 +107,7 @@ const startServer = async () => {
     if (shouldSeedDemoUsers) {
         await (0, UserModel_1.ensureDemoUsers)();
     }
+    await (0, rbacService_1.ensureDefaultRolesAndPermissions)();
     console.log("Database connected");
     app.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);

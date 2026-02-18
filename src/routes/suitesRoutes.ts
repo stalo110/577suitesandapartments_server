@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { getSuites, getSuiteById, updateSuite, deleteSuite } from '../controllers/suitesController';
 import { uploadImages } from '../helpers/uploadImage';
-import { authenticate, authorizeRoles } from '../middleware/auth';
+import { authenticate, authorizePermission } from '../middleware/auth';
 
 const router = Router();
 
@@ -10,10 +10,10 @@ router.get('/suites/:id', getSuiteById);
 router.put(
   '/suites/:id',
   authenticate,
-  authorizeRoles('ADMIN'),
+  authorizePermission('manage_suites'),
   uploadImages.array('images', 6),
   updateSuite
 );
-router.delete('/suites/:id', authenticate, authorizeRoles('ADMIN'), deleteSuite);
+router.delete('/suites/:id', authenticate, authorizePermission('manage_suites'), deleteSuite);
 
 export default router;
