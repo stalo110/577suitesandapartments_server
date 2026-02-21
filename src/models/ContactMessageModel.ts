@@ -17,6 +17,10 @@ export class ContactMessage extends Model<
   declare phone: string | null;
   declare subject: string | null;
   declare message: string;
+  declare status: CreationOptional<'unread' | 'read'>;
+  declare adminReply: CreationOptional<string | null>;
+  declare adminRepliedAt: CreationOptional<Date | null>;
+  declare adminRepliedBy: CreationOptional<string | null>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
 }
@@ -47,6 +51,26 @@ ContactMessage.init(
     message: {
       type: DataTypes.TEXT,
       allowNull: false,
+    },
+    status: {
+      type: DataTypes.ENUM('unread', 'read'),
+      allowNull: false,
+      defaultValue: 'unread',
+    },
+    adminReply: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      defaultValue: null,
+    },
+    adminRepliedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      defaultValue: null,
+    },
+    adminRepliedBy: {
+      type: DataTypes.STRING(180),
+      allowNull: true,
+      defaultValue: null,
     },
     createdAt: DataTypes.DATE,
     updatedAt: DataTypes.DATE,

@@ -142,6 +142,24 @@ Subject: ${subject || 'n/a'}
 Message: ${message}`,
   });
 
+export const sendContactReplyEmail = async (
+  to: string,
+  name: string,
+  subject: string,
+  replyMessage: string
+) =>
+  transporter.sendMail({
+    ...baseDetails,
+    to,
+    subject: `Re: ${subject || 'Your inquiry at 517 VIP Suites'}`,
+    html: `
+      <p>Hi ${name},</p>
+      <p>Thank you for reaching out to us.</p>
+      <p>${replyMessage.replace(/\n/g, '<br/>')}</p>
+      <p>Warm regards,<br/>517 VIP Suites &amp; Apartments</p>
+    `,
+  });
+
 export const sendAdminPasswordResetEmail = async (to: string, resetUrl: string) =>
   transporter.sendMail({
     ...baseDetails,
