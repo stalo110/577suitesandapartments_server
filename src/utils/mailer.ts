@@ -3,13 +3,15 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const username = process.env.USERNAME;
-const password = process.env.PASSWORD;
-const host = process.env.INCOMING_SERVER;
+const smtpUsername = process.env.SMTP_USERNAME || process.env.SMTP_USER;
+const smtpPassword = process.env.SMTP_PASSWORD || process.env.SMTP_PASS;
+const host = process.env.SMTP_HOST || process.env.INCOMING_SERVER;
 const port = Number(process.env.SMTP_PORT || 465);
 
-if (!username || !password || !host) {
-  throw new Error('Missing SMTP configuration (USERNAME, PASSWORD, INCOMING_SERVER) in .env');
+if (!smtpUsername || !smtpPassword || !host) {
+  throw new Error(
+    'Missing SMTP configuration (SMTP_USERNAME/SMTP_USER, SMTP_PASSWORD/SMTP_PASS, SMTP_HOST/INCOMING_SERVER) in .env'
+  );
 }
 
 const transporter = nodemailer.createTransport({
@@ -17,13 +19,13 @@ const transporter = nodemailer.createTransport({
   port,
   secure: port === 465,
   auth: {
-    user: username,
-    pass: password,
+    user: smtpUsername,
+    pass: smtpPassword,
   },
 });
 
 const baseDetails = {
-  from: `"517 VIP Suites and Apartments" <${username}>`,
+  from: `"517 VIP Suites and Apartments" <${smtpUsername}>`,
 };
 
 const formatCurrency = (value: number) => `₦${Number(value).toLocaleString()}`;
@@ -65,7 +67,7 @@ export const sendAdminBookingNotification = async (
 ) =>
   transporter.sendMail({
     ...baseDetails,
-    to: username,
+    to: smtpUsername,
     subject: `New booking: ${suiteName} (${bookingReference})`,
     text: `Guest: ${guestName} <${guestEmail}>
 Dates: ${new Date(checkIn).toLocaleDateString()} → ${new Date(checkOut).toLocaleDateString()}
@@ -104,7 +106,7 @@ export const sendAdminPaymentNotification = async (
 ) =>
   transporter.sendMail({
     ...baseDetails,
-    to: username,
+    to: smtpUsername,
     subject: `Payment confirmed: ${suiteName} (${reference})`,
     text: `Guest: ${guestName} <${guestEmail}>
 Suite: ${suiteName}
@@ -133,7 +135,7 @@ export const sendAdminContactNotification = async (
 ) =>
   transporter.sendMail({
     ...baseDetails,
-    to: username,
+    to: smtpUsername,
     subject: `New contact form submission: ${subject || 'General inquiry'}`,
     text: `Name: ${name}
 Email: ${email}
