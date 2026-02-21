@@ -107,7 +107,8 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 const startServer = async () => {
   const PORT = Number(process.env.PORT || 4000);
   const shouldSeedDemoUsers =
-    process.env.SEED_DEMO_USERS === "true" || process.env.NODE_ENV !== "production";
+    process.env.SEED_DEMO_USERS === "true" ||
+    (process.env.NODE_ENV === "development" && process.env.SEED_DEMO_USERS !== "false");
 
   if (process.env.DB_SYNC === "true") {
     await sequelize.sync();
@@ -115,7 +116,11 @@ const startServer = async () => {
 
   await connectDB();
   if (shouldSeedDemoUsers) {
-    await ensureDemoUsers();
+    try {
+      await ensureDemoUsers();
+    } catch (error) {
+      console.warn("Skipping demo user seed due to database/schema mismatch:", error);
+    }
   }
   await ensureDefaultRolesAndPermissions();
 
