@@ -424,10 +424,15 @@ export const verifyPaymentRedirect = async (req: Request, res: Response) => {
   }
 
   const normalizedGateway = normalizeGateway(gateway, reference);
-  const frontendBase = process.env.PUBLIC_CLIENT_URL || 'http://localhost:3039';
+  const frontendBaseRaw =
+    process.env.PUBLIC_CLIENT_URL ||
+    process.env.CLIENT_URL ||
+    process.env.FRONTEND_URL ||
+    'http://localhost:3039';
+  const frontendBase = String(frontendBaseRaw).replace(/\/+$/, '');
 
   if (!normalizedGateway) {
-    return res.redirect(`${frontendBase}/order/failed?ref=${reference}`);
+    return res.redirect(`${frontendBase}/payment-failed?ref=${reference}`);
   }
 
   try {
@@ -444,14 +449,14 @@ export const verifyPaymentRedirect = async (req: Request, res: Response) => {
       });
     }
 
-    const redirectPath = result.success ? 'order/success' : 'order/failed';
+    const redirectPath = result.success ? 'payment-success' : 'payment-failed';
     return res.redirect(`${frontendBase}/${redirectPath}?ref=${reference}&gateway=${normalizedGateway}`);
   } catch (error: any) {
     await logPaymentError('payment.verify.redirect_error', {
       reference,
       error: error.message,
     });
-    return res.redirect(`${frontendBase}/order/failed?ref=${reference}&gateway=${normalizedGateway}`);
+    return res.redirect(`${frontendBase}/payment-failed?ref=${reference}&gateway=${normalizedGateway}`);
   }
 };
 

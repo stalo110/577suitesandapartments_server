@@ -48,10 +48,146 @@ const groupCounts = (items: Booking[], keyFn: (date: Date) => string) => {
     .sort((a, b) => a.period.localeCompare(b.period));
 };
 
+interface PdfSection {
+  title: string;
+  lines?: string[];
+  table?: {
+    headers: string[];
+    rows: string[][];
+  };
+}
+
+const sanitizePdfCell = (value: unknown) => {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString().replace('T', ' ').slice(0, 16);
+  }
+
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  return String(value);
+};
+
+const formatDatePdfCell = (value: unknown, includeTime = false) => {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
+
+  const dateValue = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(dateValue.getTime())) {
+    return sanitizePdfCell(value);
+  }
+
+  return includeTime
+    ? dateValue.toISOString().replace('T', ' ').slice(0, 16)
+    : dateValue.toISOString().slice(0, 10);
+};
+
+const formatCurrencyPdfCell = (value: unknown) => {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) {
+    return sanitizePdfCell(value);
+  }
+  return `NGN ${amount.toFixed(2)}`;
+};
+
+const ensurePdfSpace = (
+  doc: InstanceType<typeof PDFDocument>,
+  requiredHeight: number
+) => {
+  const pageBottom = doc.page.height - doc.page.margins.bottom;
+  if (doc.y + requiredHeight > pageBottom) {
+    doc.addPage();
+  }
+};
+
+const drawPdfTable = (
+  doc: InstanceType<typeof PDFDocument>,
+  headers: string[],
+  rows: string[][]
+) => {
+  if (!headers.length) {
+    return;
+  }
+
+  const tableLeft = doc.page.margins.left;
+  const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const columnCount = headers.length;
+  const columnWidth = tableWidth / columnCount;
+  const headerHeight = 20;
+  const rowHeight = 18;
+  const pageBottom = doc.page.height - doc.page.margins.bottom;
+  const textPaddingX = 4;
+  const textPaddingY = 5;
+
+  const drawRow = (cells: string[], isHeader: boolean) => {
+    const y = doc.y;
+    const currentRowHeight = isHeader ? headerHeight : rowHeight;
+
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+      const x = tableLeft + columnIndex * columnWidth;
+      const cellValue = sanitizePdfCell(cells[columnIndex] ?? '');
+
+      doc
+        .rect(x, y, columnWidth, currentRowHeight)
+        .fillAndStroke(isHeader ? '#f4f4f4' : '#ffffff', '#d6d6d6');
+
+      doc
+        .fillColor(isHeader ? '#111111' : '#222222')
+        .font(isHeader ? 'Helvetica-Bold' : 'Helvetica')
+        .fontSize(8)
+        .text(cellValue, x + textPaddingX, y + textPaddingY, {
+          width: columnWidth - textPaddingX * 2,
+          height: currentRowHeight - textPaddingY,
+          ellipsis: true,
+          lineBreak: false,
+        });
+    }
+
+    doc.y = y + currentRowHeight;
+  };
+
+  const drawHeader = () => {
+    ensurePdfSpace(doc, headerHeight + 2);
+    drawRow(headers, true);
+  };
+
+  drawHeader();
+
+  if (!rows.length) {
+    if (doc.y + rowHeight > pageBottom) {
+      doc.addPage();
+      drawHeader();
+    }
+    const emptyRow = ['No records found for selected period.', ...new Array(Math.max(0, columnCount - 1)).fill('')];
+    drawRow(emptyRow, false);
+  } else {
+    rows.forEach((row) => {
+      if (doc.y + rowHeight > pageBottom) {
+        doc.addPage();
+        drawHeader();
+      }
+      drawRow(row, false);
+    });
+  }
+
+  doc.fillColor('#000000').font('Helvetica').fontSize(10);
+  doc.moveDown(0.7);
+};
+
 const buildPdfBuffer = (
   title: string,
   periodLabel: string,
-  sections: Array<{ title: string; lines: string[] }>
+  sections: PdfSection[]
 ) =>
   new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 48 });
@@ -60,18 +196,32 @@ const buildPdfBuffer = (
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    doc.fontSize(18).text(title);
+    doc.font('Helvetica-Bold').fontSize(18).fillColor('#000000').text(title);
     doc.moveDown(0.5);
-    doc.fontSize(10).text(`Period: ${periodLabel}`);
+    doc.font('Helvetica').fontSize(10).fillColor('#444444').text(`Period: ${periodLabel}`);
     doc.moveDown(1);
 
     sections.forEach((section) => {
-      doc.fontSize(13).text(section.title);
+      ensurePdfSpace(doc, 28);
+      doc.font('Helvetica-Bold').fontSize(13).fillColor('#000000').text(section.title);
       doc.moveDown(0.3);
-      doc.fontSize(10);
-      section.lines.forEach((line) => {
-        doc.text(line);
-      });
+
+      if (section.table) {
+        drawPdfTable(doc, section.table.headers, section.table.rows);
+        return;
+      }
+
+      if (section.lines?.length) {
+        doc.font('Helvetica').fontSize(10).fillColor('#111111');
+        section.lines.forEach((line) => {
+          ensurePdfSpace(doc, 16);
+          doc.text(line);
+        });
+        doc.moveDown(0.8);
+        return;
+      }
+
+      doc.font('Helvetica').fontSize(10).fillColor('#666666').text('No data available.');
       doc.moveDown(0.8);
     });
 
@@ -87,6 +237,39 @@ type RevenueRow = {
   channel: string;
   status: string;
   createdAt: Date | null;
+};
+
+type PeriodCountRow = {
+  period: string;
+  total: number;
+};
+
+type SummaryReportData = {
+  bookings?: {
+    total?: number;
+    confirmed?: number;
+    cancelled?: number;
+    pending?: number;
+    daily?: PeriodCountRow[];
+    weekly?: PeriodCountRow[];
+    monthly?: PeriodCountRow[];
+  };
+  revenue?: {
+    totalRevenue?: number;
+    paymentCount?: number;
+    byGateway?: Record<string, number>;
+    sources?: {
+      gatewayPayments?: number;
+      manualBookings?: number;
+      restaurantOrders?: number;
+    };
+  };
+  occupancy?: {
+    totalSuites?: number;
+    totalBookedNights?: number;
+    daysInPeriod?: number;
+    occupancyRate?: number;
+  };
 };
 
 const withinRange = (period: { start: Date; end: Date }) => ({
@@ -387,7 +570,7 @@ export const exportReport = async (req: Request, res: Response) => {
 
   try {
     let data: Record<string, unknown>[] = [];
-    let summary: any = null;
+    let summary: SummaryReportData | null = null;
     const period = parseDateRange(req);
 
     if (type === 'bookings') {
@@ -443,19 +626,20 @@ export const exportReport = async (req: Request, res: Response) => {
         },
       ];
     } else if (type === 'summary') {
-      const summaryResponse = await new Promise<Record<string, unknown>>(
+      const summaryResponse = await new Promise<SummaryReportData>(
         (resolve, reject) => {
           const fakeRes = {
-            json: (payload: any) => resolve(payload.data),
+            json: (payload: { data: SummaryReportData }) => resolve(payload.data),
             status: () => ({
-              json: (payload: any) => reject(new Error(payload.error)),
+              json: (payload: { error?: string }) =>
+                reject(new Error(payload.error || 'Error generating summary report')),
             }),
           } as unknown as Response;
           getSummaryReport(req, fakeRes).catch(reject);
         }
       );
 
-      summary = summaryResponse as any;
+      summary = summaryResponse;
       data = [
         {
           totalBookings: summary.bookings?.total,
@@ -490,19 +674,19 @@ export const exportReport = async (req: Request, res: Response) => {
           'Daily Booking Summary',
           'Date,Bookings',
           ...(summary.bookings?.daily || []).map(
-            (row: any) => `${row.period},${row.total}`
+            (row) => `${row.period},${row.total}`
           ),
           '',
           'Weekly Booking Summary',
           'Week,Bookings',
           ...(summary.bookings?.weekly || []).map(
-            (row: any) => `${row.period},${row.total}`
+            (row) => `${row.period},${row.total}`
           ),
           '',
           'Monthly Booking Summary',
           'Month,Bookings',
           ...(summary.bookings?.monthly || []).map(
-            (row: any) => `${row.period},${row.total}`
+            (row) => `${row.period},${row.total}`
           ),
           '',
           'Revenue by Channel',
@@ -530,53 +714,154 @@ export const exportReport = async (req: Request, res: Response) => {
 
     const periodLabel = `${period.start.toISOString()} - ${period.end.toISOString()}`;
     const sectionTitle = `${type.charAt(0).toUpperCase()}${type.slice(1)} Report`;
-    let sections: Array<{ title: string; lines: string[] }>;
+    let sections: PdfSection[] = [];
+
     if (type === 'summary' && summary) {
+      const summaryRows = [
+        ['Total bookings', sanitizePdfCell(summary.bookings?.total ?? 0)],
+        ['Confirmed bookings', sanitizePdfCell(summary.bookings?.confirmed ?? 0)],
+        ['Cancelled bookings', sanitizePdfCell(summary.bookings?.cancelled ?? 0)],
+        ['Pending bookings', sanitizePdfCell(summary.bookings?.pending ?? 0)],
+        ['Total revenue', formatCurrencyPdfCell(summary.revenue?.totalRevenue ?? 0)],
+        ['Payment count', sanitizePdfCell(summary.revenue?.paymentCount ?? 0)],
+        ['Occupancy rate (%)', sanitizePdfCell(summary.occupancy?.occupancyRate ?? 0)],
+        ['Total suites', sanitizePdfCell(summary.occupancy?.totalSuites ?? 0)],
+        ['Total booked nights', sanitizePdfCell(summary.occupancy?.totalBookedNights ?? 0)],
+      ];
+
       sections = [
         {
           title: 'Summary',
-          lines: [
-            `Total bookings: ${summary.bookings?.total ?? 0}`,
-            `Confirmed bookings: ${summary.bookings?.confirmed ?? 0}`,
-            `Cancelled bookings: ${summary.bookings?.cancelled ?? 0}`,
-            `Pending bookings: ${summary.bookings?.pending ?? 0}`,
-            `Total revenue: ₦${summary.revenue?.totalRevenue ?? 0}`,
-            `Payment count: ${summary.revenue?.paymentCount ?? 0}`,
-            `Occupancy rate: ${summary.occupancy?.occupancyRate ?? 0}%`,
-            `Total suites: ${summary.occupancy?.totalSuites ?? 0}`,
-            `Total booked nights: ${summary.occupancy?.totalBookedNights ?? 0}`,
-          ],
+          table: {
+            headers: ['Metric', 'Value'],
+            rows: summaryRows,
+          },
         },
         {
           title: 'Daily Booking Summary',
-          lines: (summary.bookings?.daily || []).map(
-            (row: any) => `${row.period}: ${row.total}`
-          ),
+          table: {
+            headers: ['Date', 'Bookings'],
+            rows: (summary.bookings?.daily || []).map((row) => [
+              sanitizePdfCell(row.period),
+              sanitizePdfCell(row.total),
+            ]),
+          },
         },
         {
           title: 'Weekly Booking Summary',
-          lines: (summary.bookings?.weekly || []).map(
-            (row: any) => `${row.period}: ${row.total}`
-          ),
+          table: {
+            headers: ['Week', 'Bookings'],
+            rows: (summary.bookings?.weekly || []).map((row) => [
+              sanitizePdfCell(row.period),
+              sanitizePdfCell(row.total),
+            ]),
+          },
         },
         {
           title: 'Monthly Booking Summary',
-          lines: (summary.bookings?.monthly || []).map(
-            (row: any) => `${row.period}: ${row.total}`
-          ),
+          table: {
+            headers: ['Month', 'Bookings'],
+            rows: (summary.bookings?.monthly || []).map((row) => [
+              sanitizePdfCell(row.period),
+              sanitizePdfCell(row.total),
+            ]),
+          },
         },
         {
           title: 'Revenue by Channel',
-          lines: Object.entries(summary.revenue?.byGateway || {}).map(
-            ([channel, amount]) => `${channel}: ₦${amount}`
-          ),
+          table: {
+            headers: ['Channel', 'Amount'],
+            rows: Object.entries(summary.revenue?.byGateway || {}).map(
+              ([channel, amount]) => [sanitizePdfCell(channel), formatCurrencyPdfCell(amount)]
+            ),
+          },
         },
       ];
-    } else {
+    } else if (type === 'bookings') {
       sections = [
         {
           title: sectionTitle,
-          lines: data.map((row) => JSON.stringify(row)),
+          table: {
+            headers: [
+              'Booking ID',
+              'Guest',
+              'Suite ID',
+              'Check In',
+              'Check Out',
+              'Amount',
+              'Status',
+              'Payment',
+              'Method',
+              'Created',
+            ],
+            rows: data.map((row) => [
+              sanitizePdfCell(row.id),
+              sanitizePdfCell(row.guestName),
+              sanitizePdfCell(row.suiteId),
+              formatDatePdfCell(row.checkIn),
+              formatDatePdfCell(row.checkOut),
+              formatCurrencyPdfCell(row.totalAmount),
+              sanitizePdfCell(row.status),
+              sanitizePdfCell(row.paymentStatus),
+              sanitizePdfCell(row.paymentMethod),
+              formatDatePdfCell(row.createdAt, true),
+            ]),
+          },
+        },
+      ];
+    } else if (type === 'revenue') {
+      sections = [
+        {
+          title: sectionTitle,
+          table: {
+            headers: [
+              'Entry ID',
+              'Source',
+              'Reference',
+              'Booking ID',
+              'Amount',
+              'Channel',
+              'Status',
+              'Created',
+            ],
+            rows: data.map((row) => [
+              sanitizePdfCell(row.id),
+              sanitizePdfCell(row.source),
+              sanitizePdfCell(row.reference),
+              sanitizePdfCell(row.bookingId),
+              formatCurrencyPdfCell(row.amount),
+              sanitizePdfCell(row.channel),
+              sanitizePdfCell(row.status),
+              formatDatePdfCell(row.createdAt, true),
+            ]),
+          },
+        },
+      ];
+    } else if (type === 'occupancy') {
+      sections = [
+        {
+          title: sectionTitle,
+          table: {
+            headers: ['Total Suites', 'Total Bookings', 'Occupancy Rate (%)'],
+            rows: data.map((row) => [
+              sanitizePdfCell(row.totalSuites),
+              sanitizePdfCell(row.totalBookings),
+              sanitizePdfCell(row.occupancyRate),
+            ]),
+          },
+        },
+      ];
+    } else {
+      const fallbackHeaders = data.length ? Object.keys(data[0]) : ['Result'];
+      sections = [
+        {
+          title: sectionTitle,
+          table: {
+            headers: fallbackHeaders,
+            rows: data.map((row) =>
+              fallbackHeaders.map((header) => sanitizePdfCell(row[header]))
+            ),
+          },
         },
       ];
     }
