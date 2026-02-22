@@ -10,40 +10,19 @@ import { authenticate, authorizePermission } from '../middleware/auth';
 
 const router = Router();
 
-const registerRoutes = (basePath: string) => {
-  router.get(
-    `${basePath}/promotions`,
-    authenticate,
-    authorizePermission('manage_promotions'),
-    getPromotions
-  );
-  router.get(
-    `${basePath}/promotions/:id`,
-    authenticate,
-    authorizePermission('manage_promotions'),
-    getPromotionById
-  );
-  router.post(
-    `${basePath}/promotions`,
-    authenticate,
-    authorizePermission('manage_promotions'),
-    createPromotion
-  );
-  router.put(
-    `${basePath}/promotions/:id`,
-    authenticate,
-    authorizePermission('manage_promotions'),
-    updatePromotion
-  );
-  router.delete(
-    `${basePath}/promotions/:id`,
-    authenticate,
-    authorizePermission('manage_promotions'),
-    deletePromotion
-  );
-};
+router.get('/admin/promotions', authenticate, authorizePermission('manage_promotions'), getPromotions);
+router.get('/api/admin/promotions', authenticate, authorizePermission('manage_promotions'), getPromotions);
 
-registerRoutes('/admin');
-registerRoutes('/api/admin');
+router.get('/admin/promotions/:id', authenticate, authorizePermission('manage_promotions'), getPromotionById);
+router.get('/api/admin/promotions/:id', authenticate, authorizePermission('manage_promotions'), getPromotionById);
+
+router.post('/admin/promotions', authenticate, authorizePermission('manage_promotions'), createPromotion);
+router.post('/api/admin/promotions', authenticate, authorizePermission('manage_promotions'), createPromotion);
+
+router.put('/admin/promotions/:id', authenticate, authorizePermission('manage_promotions'), updatePromotion);
+router.put('/api/admin/promotions/:id', authenticate, authorizePermission('manage_promotions'), updatePromotion);
+
+router.delete('/admin/promotions/:id', authenticate, authorizePermission('manage_promotions'), deletePromotion);
+router.delete('/api/admin/promotions/:id', authenticate, authorizePermission('manage_promotions'), deletePromotion);
 
 export default router;
