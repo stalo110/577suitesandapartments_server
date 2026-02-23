@@ -28,6 +28,27 @@ interface PaystackVerifyResponse {
 }
 
 const normalizeAmount = (amount: number) => Number(Number(amount).toFixed(2));
+const sanitizeKey = (value?: string) =>
+  String(value || '')
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/^Bearer\s+/i, '');
+const isPaystackSecretKey = (value: string) => /^sk_(test|live)_/i.test(value);
+
+const mapPaystackGatewayError = (error: unknown) => {
+  if (error instanceof GatewayError) {
+    const gatewayMessage = String((error.data as any)?.message || error.message || '');
+    if (
+      error.status === 401 ||
+      /invalid key|invalid authorization|access denied/i.test(gatewayMessage)
+    ) {
+      return new Error(
+        'PAYSTACK_SECRET_KEY is invalid. Use your Paystack Secret Key (sk_test_... or sk_live_...) on the server, not the public key, and do not include "Bearer ".'
+      );
+    }
+  }
+  return error;
+};
 
 class PaystackService {
   private client: HttpClient;
@@ -36,12 +57,17 @@ class PaystackService {
   private webhookSecret: string;
 
   constructor(client?: HttpClient) {
-    this.secretKey = process.env.PAYSTACK_SECRET_KEY || '';
-    this.publicKey = process.env.PAYSTACK_PUBLIC_KEY || '';
-    this.webhookSecret = process.env.PAYSTACK_WEBHOOK_SECRET || this.secretKey;
+    this.secretKey = sanitizeKey(process.env.PAYSTACK_SECRET_KEY || process.env.PAYSTACK_SECRET);
+    this.publicKey = sanitizeKey(process.env.PAYSTACK_PUBLIC_KEY || process.env.PAYSTACK_PUBLIC);
+    this.webhookSecret = sanitizeKey(process.env.PAYSTACK_WEBHOOK_SECRET || this.secretKey);
 
     if (!this.secretKey) {
       throw new Error('PAYSTACK_SECRET_KEY is not configured');
+    }
+    if (!isPaystackSecretKey(this.secretKey)) {
+      throw new Error(
+        'PAYSTACK_SECRET_KEY format is invalid. It must be a Paystack secret key (sk_test_... or sk_live_...).'
+      );
     }
 
     this.client =
@@ -136,7 +162,7 @@ class PaystackService {
         data: error instanceof GatewayError ? error.data : undefined,
       });
 
-      throw error;
+      throw mapPaystackGatewayError(error);
     }
   }
 
@@ -231,7 +257,7 @@ class PaystackService {
         error: error.message,
         data: error instanceof GatewayError ? error.data : undefined,
       });
-      throw error;
+      throw mapPaystackGatewayError(error);
     }
   }
 

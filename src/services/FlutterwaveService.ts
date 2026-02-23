@@ -25,6 +25,27 @@ interface FlutterwaveVerifyResponse {
 }
 
 const normalizeAmount = (amount: number) => Number(Number(amount).toFixed(2));
+const sanitizeKey = (value?: string) =>
+  String(value || '')
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/^Bearer\s+/i, '');
+const isFlutterwaveSecretKey = (value: string) => /^FLWSECK_(TEST|LIVE)-/i.test(value);
+
+const mapFlutterwaveGatewayError = (error: unknown) => {
+  if (error instanceof GatewayError) {
+    const gatewayMessage = String((error.data as any)?.message || error.message || '');
+    if (
+      error.status === 401 ||
+      /invalid authorization key|invalid key|access denied|unauthorized/i.test(gatewayMessage)
+    ) {
+      return new Error(
+        'FLUTTERWAVE_SECRET_KEY is invalid. Use your Flutterwave Secret Key (FLWSECK_TEST-... or FLWSECK_LIVE-...) on the server, not the public key, and do not include "Bearer ".'
+      );
+    }
+  }
+  return error;
+};
 
 class FlutterwaveService {
   private client: HttpClient;
@@ -34,16 +55,30 @@ class FlutterwaveService {
   private webhookHash: string;
 
   constructor(client?: HttpClient) {
-    this.secretKey = process.env.FLUTTERWAVE_SECRET_KEY || '';
-    this.publicKey = process.env.FLUTTERWAVE_PUBLIC_KEY || '';
-    this.encryptionKey = process.env.FLUTTERWAVE_ENCRYPTION_KEY || '';
-    this.webhookHash =
+    this.secretKey = sanitizeKey(
+      process.env.FLUTTERWAVE_SECRET_KEY ||
+        process.env.FLW_SECRET_KEY ||
+        process.env.FLUTTERWAVE_SECRET
+    );
+    this.publicKey = sanitizeKey(
+      process.env.FLUTTERWAVE_PUBLIC_KEY || process.env.FLW_PUBLIC_KEY || process.env.FLUTTERWAVE_PUBLIC
+    );
+    this.encryptionKey = sanitizeKey(
+      process.env.FLUTTERWAVE_ENCRYPTION_KEY || process.env.FLW_ENCRYPTION_KEY
+    );
+    this.webhookHash = sanitizeKey(
       process.env.FLUTTERWAVE_WEBHOOK_HASH ||
-      process.env.FLUTTERWAVE_SECRET_HASH ||
-      '';
+        process.env.FLUTTERWAVE_SECRET_HASH ||
+        process.env.FLW_WEBHOOK_HASH
+    );
 
     if (!this.secretKey) {
       throw new Error('FLUTTERWAVE_SECRET_KEY is not configured');
+    }
+    if (!isFlutterwaveSecretKey(this.secretKey)) {
+      throw new Error(
+        'FLUTTERWAVE_SECRET_KEY format is invalid. It must be a Flutterwave secret key (FLWSECK_TEST-... or FLWSECK_LIVE-...).'
+      );
     }
 
     this.client =
@@ -145,7 +180,7 @@ class FlutterwaveService {
         data: error instanceof GatewayError ? error.data : undefined,
       });
 
-      throw error;
+      throw mapFlutterwaveGatewayError(error);
     }
   }
 
@@ -155,7 +190,7 @@ class FlutterwaveService {
     try {
       const response = await this.client.request<FlutterwaveVerifyResponse>(
         'GET',
-        `/transactions/${reference}/verify`
+        `/transactions/verify_by_reference?tx_ref=${encodeURIComponent(reference)}`
       );
 
       if (response.status !== 'success') {
@@ -236,7 +271,7 @@ class FlutterwaveService {
         error: error.message,
         data: error instanceof GatewayError ? error.data : undefined,
       });
-      throw error;
+      throw mapFlutterwaveGatewayError(error);
     }
   }
 
