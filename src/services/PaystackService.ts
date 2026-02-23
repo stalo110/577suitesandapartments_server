@@ -36,6 +36,15 @@ const sanitizeKey = (value?: string) =>
 const isPaystackSecretKey = (value: string) => /^sk_(test|live)_/i.test(value);
 
 const mapPaystackGatewayError = (error: unknown) => {
+  const plainMessage =
+    error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+
+  if (/invalid key|invalid authorization|access denied/i.test(plainMessage)) {
+    return new Error(
+      'PAYSTACK_SECRET_KEY is invalid. Use your Paystack Secret Key (sk_test_... or sk_live_...) on the server, not the public key, and do not include "Bearer ".'
+    );
+  }
+
   if (error instanceof GatewayError) {
     const gatewayMessage = String((error.data as any)?.message || error.message || '');
     if (

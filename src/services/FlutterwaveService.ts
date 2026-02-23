@@ -33,6 +33,15 @@ const sanitizeKey = (value?: string) =>
 const isFlutterwaveSecretKey = (value: string) => /^FLWSECK_(TEST|LIVE)-/i.test(value);
 
 const mapFlutterwaveGatewayError = (error: unknown) => {
+  const plainMessage =
+    error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+
+  if (/invalid authorization key|invalid key|access denied|unauthorized/i.test(plainMessage)) {
+    return new Error(
+      'FLUTTERWAVE_SECRET_KEY is invalid. Use your Flutterwave Secret Key (FLWSECK_TEST-... or FLWSECK_LIVE-...) on the server, not the public key, and do not include "Bearer ".'
+    );
+  }
+
   if (error instanceof GatewayError) {
     const gatewayMessage = String((error.data as any)?.message || error.message || '');
     if (
