@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import PDFDocument from 'pdfkit';
 import { PNG } from 'pngjs';
 import { Request, Response } from 'express';
@@ -11,7 +13,86 @@ import PaymentDispatcher from '../services/PaymentDispatcher';
 import { logPayment, logPaymentError } from '../utils/paymentLogger';
 import { getEnvValue, getPaymentEnvironmentSummary } from '../utils/paymentEnv';
 
-const formatCurrency = (value: number) => `₦${Number(value).toLocaleString()}`;
+type ReceiptData = {
+  reference: string;
+  bookingReference: string;
+  guestName: string;
+  email: string;
+  phone: string;
+  suiteName: string;
+  suiteType: string;
+  checkIn: string;
+  checkOut: string;
+  amount: number;
+  gateway: string;
+  status: string;
+  createdAt: Date;
+};
+
+type ReceiptRow = {
+  label: string;
+  value: string;
+  maxChars?: number;
+};
+
+type PngColor = {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+};
+
+type ReceiptLogoAsset = {
+  png: PNG;
+  buffer: Buffer;
+};
+
+const PNG_COLORS = {
+  pageBackground: { r: 246, g: 249, b: 253, a: 255 },
+  white: { r: 255, g: 255, b: 255, a: 255 },
+  border: { r: 214, g: 226, b: 239, a: 255 },
+  header: { r: 11, g: 37, b: 69, a: 255 },
+  gold: { r: 212, g: 175, b: 55, a: 255 },
+  titleLight: { r: 229, g: 239, b: 250, a: 255 },
+  sectionBand: { r: 240, g: 246, b: 253, a: 255 },
+  textPrimary: { r: 18, g: 38, b: 58, a: 255 },
+  textMuted: { r: 94, g: 114, b: 138, a: 255 },
+  success: { r: 31, g: 157, b: 85, a: 255 },
+  warning: { r: 181, g: 125, b: 40, a: 255 },
+  summary: { r: 236, g: 244, b: 253, a: 255 },
+} satisfies Record<string, PngColor>;
+
+const formatCurrency = (value: number) =>
+  `NGN ${Number(value).toLocaleString('en-NG', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+
+const formatReceiptDate = (value: Date | string, includeTime = false) => {
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return String(value);
+  }
+  const options: Intl.DateTimeFormatOptions = includeTime
+    ? {
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      }
+    : {
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+      };
+  return new Intl.DateTimeFormat('en-NG', options).format(parsed);
+};
+
+const normalizeReceiptText = (value: string | null | undefined) => {
+  const sanitized = String(value ?? '').trim();
+  return sanitized || 'N/A';
+};
 
 const dispatcher = new PaymentDispatcher();
 
@@ -65,9 +146,91 @@ const mergePaymentDetails = (
   ...next,
 });
 
+let cachedReceiptLogoPath: string | null | undefined;
+let cachedReceiptLogoPng: PNG | null | undefined;
+let cachedReceiptLogoAsset: ReceiptLogoAsset | null | undefined;
+
+const resolveReceiptLogoPath = () => {
+  if (cachedReceiptLogoPath !== undefined) {
+    return cachedReceiptLogoPath;
+  }
+  const envLogoPath = getEnvValue('RECEIPT_LOGO_PATH');
+  const candidates = [
+    envLogoPath,
+    path.resolve(process.cwd(), 'Client/public/logo.png'),
+    path.resolve(process.cwd(), '../Client/public/logo.png'),
+    path.resolve(process.cwd(), '../../Client/public/logo.png'),
+    path.resolve(__dirname, '../../../Client/public/logo.png'),
+    path.resolve(__dirname, '../../../../Client/public/logo.png'),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  cachedReceiptLogoPath = candidates.find((candidate) => fs.existsSync(candidate)) || null;
+  return cachedReceiptLogoPath;
+};
+
+const loadReceiptLogoPng = () => {
+  if (cachedReceiptLogoPng !== undefined) {
+    return cachedReceiptLogoPng;
+  }
+  const logoPath = resolveReceiptLogoPath();
+  if (!logoPath) {
+    cachedReceiptLogoPng = null;
+    return cachedReceiptLogoPng;
+  }
+  try {
+    cachedReceiptLogoPng = PNG.sync.read(fs.readFileSync(logoPath));
+  } catch (_error) {
+    cachedReceiptLogoPng = null;
+  }
+  return cachedReceiptLogoPng;
+};
+
+const resizePng = (source: PNG, targetWidth: number, targetHeight: number) => {
+  const resized = new PNG({ width: targetWidth, height: targetHeight });
+  for (let y = 0; y < targetHeight; y += 1) {
+    const sourceY = Math.min(source.height - 1, Math.floor((y / targetHeight) * source.height));
+    for (let x = 0; x < targetWidth; x += 1) {
+      const sourceX = Math.min(source.width - 1, Math.floor((x / targetWidth) * source.width));
+      const sourceIndex = (source.width * sourceY + sourceX) << 2;
+      const targetIndex = (targetWidth * y + x) << 2;
+      resized.data[targetIndex] = source.data[sourceIndex];
+      resized.data[targetIndex + 1] = source.data[sourceIndex + 1];
+      resized.data[targetIndex + 2] = source.data[sourceIndex + 2];
+      resized.data[targetIndex + 3] = source.data[sourceIndex + 3];
+    }
+  }
+  return resized;
+};
+
+const getReceiptLogoAsset = () => {
+  if (cachedReceiptLogoAsset !== undefined) {
+    return cachedReceiptLogoAsset;
+  }
+
+  const sourceLogo = loadReceiptLogoPng();
+  if (!sourceLogo) {
+    cachedReceiptLogoAsset = null;
+    return cachedReceiptLogoAsset;
+  }
+
+  const maxWidth = 280;
+  const maxHeight = 180;
+  const scale = Math.min(maxWidth / sourceLogo.width, maxHeight / sourceLogo.height, 1);
+  const targetWidth = Math.max(1, Math.round(sourceLogo.width * scale));
+  const targetHeight = Math.max(1, Math.round(sourceLogo.height * scale));
+  const resizedLogo = resizePng(sourceLogo, targetWidth, targetHeight);
+  cachedReceiptLogoAsset = {
+    png: resizedLogo,
+    buffer: PNG.sync.write(resizedLogo),
+  };
+  return cachedReceiptLogoAsset;
+};
+
 const FONT_5X7: Record<string, string[]> = {
   ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
   '-': ['00000', '00000', '00000', '01110', '00000', '00000', '00000'],
+  '(': ['00010', '00100', '01000', '01000', '01000', '00100', '00010'],
+  ')': ['01000', '00100', '00010', '00010', '00010', '00100', '01000'],
   ':': ['00000', '00100', '00100', '00000', '00100', '00100', '00000'],
   '/': ['00001', '00010', '00100', '01000', '10000', '00000', '00000'],
   '.': ['00000', '00000', '00000', '00000', '00000', '00100', '00100'],
@@ -112,171 +275,482 @@ const FONT_5X7: Record<string, string[]> = {
   Z: ['11111', '00001', '00010', '00100', '01000', '10000', '11111'],
 };
 
-const drawTextOnPng = (png: PNG, x: number, y: number, text: string, scale = 2) => {
-  const color = { r: 0, g: 0, b: 0, a: 255 };
+const normalizePngText = (text: string) =>
+  normalizeReceiptText(text).toUpperCase().replace(/[^A-Z0-9 @:.,\-\/()]/g, ' ');
+
+const drawTextOnPng = (
+  png: PNG,
+  x: number,
+  y: number,
+  text: string,
+  scale = 2,
+  color: PngColor = PNG_COLORS.textPrimary
+) => {
+  const safeText = normalizePngText(text);
   let cursorX = x;
-  const upper = text.toUpperCase();
-  for (const char of upper) {
+  for (const char of safeText) {
     const pattern = FONT_5X7[char] || FONT_5X7['?'];
-    pattern.forEach((row, rowIndex) => {
-      row.split('').forEach((pixel, colIndex) => {
-        if (pixel === '1') {
-          for (let dy = 0; dy < scale; dy += 1) {
-            for (let dx = 0; dx < scale; dx += 1) {
-              const px = cursorX + colIndex * scale + dx;
-              const py = y + rowIndex * scale + dy;
-              if (px < 0 || py < 0 || px >= png.width || py >= png.height) {
-                return;
-              }
-              const idx = (png.width * py + px) << 2;
-              png.data[idx] = color.r;
-              png.data[idx + 1] = color.g;
-              png.data[idx + 2] = color.b;
-              png.data[idx + 3] = color.a;
+    for (let rowIndex = 0; rowIndex < pattern.length; rowIndex += 1) {
+      const row = pattern[rowIndex];
+      for (let colIndex = 0; colIndex < row.length; colIndex += 1) {
+        if (row[colIndex] !== '1') {
+          continue;
+        }
+        for (let dy = 0; dy < scale; dy += 1) {
+          for (let dx = 0; dx < scale; dx += 1) {
+            const px = cursorX + colIndex * scale + dx;
+            const py = y + rowIndex * scale + dy;
+            if (px < 0 || py < 0 || px >= png.width || py >= png.height) {
+              continue;
             }
+            const idx = (png.width * py + px) << 2;
+            png.data[idx] = color.r;
+            png.data[idx + 1] = color.g;
+            png.data[idx + 2] = color.b;
+            png.data[idx + 3] = color.a;
           }
         }
-      });
-    });
+      }
+    }
     cursorX += (5 + 1) * scale;
   }
 };
 
 const wrapText = (text: string, maxChars: number) => {
-  const words = text.split(' ');
+  const normalized = normalizeReceiptText(text);
+  const words = normalized.split(/\s+/);
   const lines: string[] = [];
   let current = '';
+  const flushCurrent = () => {
+    if (current) {
+      lines.push(current);
+      current = '';
+    }
+  };
+
   words.forEach((word) => {
+    if (!word) {
+      return;
+    }
+    if (word.length > maxChars) {
+      flushCurrent();
+      for (let index = 0; index < word.length; index += maxChars) {
+        lines.push(word.slice(index, index + maxChars));
+      }
+      return;
+    }
     const next = current ? `${current} ${word}` : word;
     if (next.length > maxChars) {
-      if (current) {
-        lines.push(current);
-      }
+      flushCurrent();
       current = word;
-    } else {
-      current = next;
+      return;
     }
+    current = next;
   });
-  if (current) {
-    lines.push(current);
-  }
-  return lines;
+  flushCurrent();
+
+  return lines.length ? lines : [normalized];
 };
 
-const buildReceiptPdf = (data: {
-  reference: string;
-  bookingReference: string;
-  guestName: string;
-  email: string;
-  phone: string;
-  suiteName: string;
-  suiteType: string;
-  checkIn: string;
-  checkOut: string;
-  amount: number;
-  gateway: string;
-  status: string;
-  createdAt: Date;
-}) =>
+const fillPngRect = (
+  png: PNG,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  color: PngColor
+) => {
+  const startX = Math.max(0, Math.floor(x));
+  const startY = Math.max(0, Math.floor(y));
+  const endX = Math.min(png.width, Math.floor(x + width));
+  const endY = Math.min(png.height, Math.floor(y + height));
+
+  for (let py = startY; py < endY; py += 1) {
+    for (let px = startX; px < endX; px += 1) {
+      const idx = (png.width * py + px) << 2;
+      png.data[idx] = color.r;
+      png.data[idx + 1] = color.g;
+      png.data[idx + 2] = color.b;
+      png.data[idx + 3] = color.a;
+    }
+  }
+};
+
+const drawPngRectBorder = (
+  png: PNG,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  borderColor: PngColor,
+  borderWidth = 1
+) => {
+  fillPngRect(png, x, y, width, borderWidth, borderColor);
+  fillPngRect(png, x, y + height - borderWidth, width, borderWidth, borderColor);
+  fillPngRect(png, x, y, borderWidth, height, borderColor);
+  fillPngRect(png, x + width - borderWidth, y, borderWidth, height, borderColor);
+};
+
+const drawPngImage = (
+  target: PNG,
+  source: PNG,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+) => {
+  const drawWidth = Math.min(Math.floor(width), target.width - Math.floor(x));
+  const drawHeight = Math.min(Math.floor(height), target.height - Math.floor(y));
+  if (drawWidth <= 0 || drawHeight <= 0) {
+    return;
+  }
+
+  const offsetX = Math.max(0, Math.floor(x));
+  const offsetY = Math.max(0, Math.floor(y));
+
+  for (let dy = 0; dy < drawHeight; dy += 1) {
+    const sy = Math.floor((dy / drawHeight) * source.height);
+    for (let dx = 0; dx < drawWidth; dx += 1) {
+      const sx = Math.floor((dx / drawWidth) * source.width);
+      const sidx = (source.width * sy + sx) << 2;
+      const alpha = source.data[sidx + 3] / 255;
+      if (alpha <= 0) {
+        continue;
+      }
+
+      const tx = offsetX + dx;
+      const ty = offsetY + dy;
+      if (tx < 0 || ty < 0 || tx >= target.width || ty >= target.height) {
+        continue;
+      }
+      const tidx = (target.width * ty + tx) << 2;
+      const inverseAlpha = 1 - alpha;
+
+      target.data[tidx] = Math.round(source.data[sidx] * alpha + target.data[tidx] * inverseAlpha);
+      target.data[tidx + 1] = Math.round(
+        source.data[sidx + 1] * alpha + target.data[tidx + 1] * inverseAlpha
+      );
+      target.data[tidx + 2] = Math.round(
+        source.data[sidx + 2] * alpha + target.data[tidx + 2] * inverseAlpha
+      );
+      target.data[tidx + 3] = 255;
+    }
+  }
+};
+
+const drawReceiptSectionPdf = (
+  doc: InstanceType<typeof PDFDocument>,
+  x: number,
+  y: number,
+  width: number,
+  title: string,
+  rows: ReceiptRow[]
+) => {
+  const paddingX = 16;
+  const paddingY = 14;
+  const labelWidth = 138;
+  const rowGap = 8;
+  const valueWidth = width - paddingX * 2 - labelWidth - 10;
+
+  doc.font('Helvetica-Bold').fontSize(10);
+  const rowHeights = rows.map((row) =>
+    Math.max(14, doc.heightOfString(normalizeReceiptText(row.value), { width: valueWidth }))
+  );
+  const rowsHeight = rowHeights.reduce((sum, rowHeight) => sum + rowHeight, 0);
+  const sectionHeight = paddingY + 18 + 10 + rowsHeight + Math.max(0, rows.length - 1) * rowGap + paddingY;
+
+  doc.save();
+  doc.roundedRect(x, y, width, sectionHeight, 10).fillAndStroke('#F8FAFC', '#DCE6F1');
+  doc.restore();
+
+  doc.fillColor('#0B2545').font('Helvetica-Bold').fontSize(11).text(title, x + paddingX, y + paddingY);
+
+  let rowY = y + paddingY + 28;
+  rows.forEach((row, index) => {
+    const rowHeight = rowHeights[index];
+    doc
+      .fillColor('#6B778C')
+      .font('Helvetica')
+      .fontSize(9)
+      .text(row.label.toUpperCase(), x + paddingX, rowY + 1, { width: labelWidth });
+    doc
+      .fillColor('#12263A')
+      .font('Helvetica-Bold')
+      .fontSize(10)
+      .text(normalizeReceiptText(row.value), x + paddingX + labelWidth + 10, rowY, {
+        width: valueWidth,
+      });
+    rowY += rowHeight + rowGap;
+  });
+
+  return y + sectionHeight + 16;
+};
+
+const drawReceiptSectionPng = (png: PNG, y: number, title: string, rows: ReceiptRow[]) => {
+  const sectionX = 40;
+  const sectionWidth = png.width - 80;
+  const titleBandHeight = 34;
+  const padding = 16;
+  const lineHeight = 18;
+  const rowGap = 6;
+
+  const rowLines = rows.map((row) =>
+    wrapText(`${row.label}: ${normalizeReceiptText(row.value)}`, row.maxChars ?? 62)
+  );
+  const bodyHeight = rowLines.reduce(
+    (sum, lines) => sum + lines.length * lineHeight + rowGap,
+    0
+  );
+  const sectionHeight = padding + titleBandHeight + bodyHeight + padding - rowGap;
+
+  fillPngRect(png, sectionX, y, sectionWidth, sectionHeight, PNG_COLORS.white);
+  drawPngRectBorder(png, sectionX, y, sectionWidth, sectionHeight, PNG_COLORS.border);
+  fillPngRect(png, sectionX + 1, y + 1, sectionWidth - 2, titleBandHeight, PNG_COLORS.sectionBand);
+  drawTextOnPng(png, sectionX + padding, y + 12, title, 2, PNG_COLORS.textPrimary);
+
+  let rowY = y + padding + titleBandHeight + 8;
+  rowLines.forEach((lines) => {
+    lines.forEach((line) => {
+      drawTextOnPng(png, sectionX + padding, rowY, line, 2, PNG_COLORS.textPrimary);
+      rowY += lineHeight;
+    });
+    rowY += rowGap;
+  });
+
+  return y + sectionHeight + 14;
+};
+
+const buildReceiptPdf = (data: ReceiptData) =>
   new Promise<Buffer>((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 48 });
+    const doc = new PDFDocument({ size: 'A4', margin: 44 });
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    doc.fontSize(20).text('517 VIP Suites & Apartments');
-    doc.moveDown(0.5);
-    doc.fontSize(14).text('Payment Receipt');
-    doc.moveDown(1);
+    const logoAsset = getReceiptLogoAsset();
+    const contentX = doc.page.margins.left;
+    const contentWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    let cursorY = doc.page.margins.top;
 
-    doc.fontSize(11).text(`Receipt Date: ${data.createdAt.toLocaleString()}`);
-    doc.text(`Payment Reference: ${data.reference}`);
-    doc.text(`Booking Reference: ${data.bookingReference}`);
-    doc.text(`Payment Status: ${data.status}`);
-    doc.text(`Gateway: ${data.gateway}`);
-    doc.moveDown(0.8);
+    const statusValue = normalizeReceiptText(data.status).toUpperCase();
+    const gatewayValue = normalizeReceiptText(data.gateway).toUpperCase();
+    const formattedAmount = formatCurrency(data.amount);
+    const statusColor = statusValue === 'PAID' ? '#1F9D55' : '#B57D28';
 
-    doc.fontSize(12).text('Guest Details', { underline: true });
-    doc.fontSize(11).text(`Name: ${data.guestName}`);
-    doc.text(`Email: ${data.email}`);
-    doc.text(`Phone: ${data.phone}`);
-    doc.moveDown(0.8);
+    const headerHeight = 124;
+    doc.save();
+    doc.roundedRect(contentX, cursorY, contentWidth, headerHeight, 12).fill('#0B2545');
+    doc.restore();
 
-    doc.fontSize(12).text('Booking Details', { underline: true });
-    doc.fontSize(11).text(`Suite: ${data.suiteName} (${data.suiteType})`);
-    doc.text(`Check-in: ${data.checkIn}`);
-    doc.text(`Check-out: ${data.checkOut}`);
-    doc.moveDown(0.8);
+    if (logoAsset) {
+      try {
+        doc.image(logoAsset.buffer, contentX + 16, cursorY + 18, { fit: [88, 88], align: 'center' });
+      } catch (_error) {
+        // Ignore invalid logo files; receipt generation should continue.
+      }
+    }
 
-    doc.fontSize(12).text('Amount', { underline: true });
-    doc.fontSize(16).text(formatCurrency(data.amount));
-    doc.moveDown(1);
+    const titleX = contentX + (logoAsset ? 120 : 24);
+    doc.fillColor('#D4AF37').font('Helvetica-Bold').fontSize(9).text('OFFICIAL PAYMENT RECEIPT', titleX, cursorY + 18);
+    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(22).text('Payment Receipt', titleX, cursorY + 32);
+    doc
+      .fillColor('#E4EDF7')
+      .font('Helvetica')
+      .fontSize(10)
+      .text('517 VIP Suites & Apartments', titleX, cursorY + 62)
+      .text(`Issued: ${formatReceiptDate(data.createdAt, true)}`, titleX, cursorY + 77);
 
-    doc.fontSize(10).text('Thank you for choosing 517 VIP Suites & Apartments.');
+    const metaX = contentX + contentWidth - 210;
+    doc.fillColor('#C6D6E8').font('Helvetica').fontSize(9).text('Receipt No.', metaX, cursorY + 22, {
+      width: 190,
+      align: 'right',
+    });
+    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(11).text(normalizeReceiptText(data.reference), metaX, cursorY + 34, {
+      width: 190,
+      align: 'right',
+    });
+    doc.fillColor('#C6D6E8').font('Helvetica').fontSize(9).text('Booking Ref', metaX, cursorY + 54, {
+      width: 190,
+      align: 'right',
+    });
+    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(11).text(normalizeReceiptText(data.bookingReference), metaX, cursorY + 66, {
+      width: 190,
+      align: 'right',
+    });
+
+    cursorY += headerHeight + 18;
+
+    const summaryHeight = 86;
+    const summaryColumnWidth = contentWidth / 3;
+    doc.save();
+    doc.roundedRect(contentX, cursorY, contentWidth, summaryHeight, 10).fillAndStroke('#EEF4FC', '#D6E3F0');
+    doc.restore();
+    doc.save();
+    doc.moveTo(contentX + summaryColumnWidth, cursorY + 16).lineTo(contentX + summaryColumnWidth, cursorY + summaryHeight - 16);
+    doc.moveTo(contentX + summaryColumnWidth * 2, cursorY + 16).lineTo(contentX + summaryColumnWidth * 2, cursorY + summaryHeight - 16);
+    doc.lineWidth(1).strokeColor('#D6E3F0').stroke();
+    doc.restore();
+
+    doc.fillColor('#6B778C').font('Helvetica').fontSize(9).text('STATUS', contentX + 16, cursorY + 20);
+    doc.fillColor(statusColor).font('Helvetica-Bold').fontSize(16).text(statusValue, contentX + 16, cursorY + 38);
+
+    doc
+      .fillColor('#6B778C')
+      .font('Helvetica')
+      .fontSize(9)
+      .text('GATEWAY', contentX + summaryColumnWidth + 16, cursorY + 20);
+    doc
+      .fillColor('#12263A')
+      .font('Helvetica-Bold')
+      .fontSize(14)
+      .text(gatewayValue, contentX + summaryColumnWidth + 16, cursorY + 40);
+
+    doc
+      .fillColor('#6B778C')
+      .font('Helvetica')
+      .fontSize(9)
+      .text('AMOUNT PAID', contentX + summaryColumnWidth * 2 + 16, cursorY + 20);
+    doc
+      .fillColor('#12263A')
+      .font('Helvetica-Bold')
+      .fontSize(14)
+      .text(formattedAmount, contentX + summaryColumnWidth * 2 + 16, cursorY + 40);
+
+    cursorY += summaryHeight + 16;
+
+    cursorY = drawReceiptSectionPdf(doc, contentX, cursorY, contentWidth, 'Guest Details', [
+      { label: 'Guest Name', value: data.guestName },
+      { label: 'Email Address', value: data.email },
+      { label: 'Phone Number', value: data.phone },
+    ]);
+
+    cursorY = drawReceiptSectionPdf(doc, contentX, cursorY, contentWidth, 'Booking Details', [
+      { label: 'Suite', value: data.suiteName },
+      { label: 'Suite Type', value: data.suiteType },
+      { label: 'Check-In', value: formatReceiptDate(data.checkIn) },
+      { label: 'Check-Out', value: formatReceiptDate(data.checkOut) },
+    ]);
+
+    cursorY = drawReceiptSectionPdf(doc, contentX, cursorY, contentWidth, 'Payment Details', [
+      { label: 'Payment Reference', value: data.reference },
+      { label: 'Booking Reference', value: data.bookingReference },
+      { label: 'Payment Gateway', value: gatewayValue },
+      { label: 'Payment Status', value: statusValue },
+      { label: 'Amount Paid', value: formattedAmount },
+    ]);
+
+    doc
+      .fillColor('#6B778C')
+      .font('Helvetica')
+      .fontSize(9)
+      .text(
+        'This is a system-generated receipt and serves as confirmation of your successful payment.',
+        contentX,
+        cursorY + 2,
+        {
+          width: contentWidth,
+          align: 'center',
+        }
+      );
+    doc
+      .fillColor('#12263A')
+      .font('Helvetica-Bold')
+      .fontSize(9)
+      .text('Thank you for choosing 517 VIP Suites & Apartments.', contentX, cursorY + 18, {
+        width: contentWidth,
+        align: 'center',
+      });
+
     doc.end();
   });
 
-const buildReceiptPng = async (data: {
-  reference: string;
-  bookingReference: string;
-  guestName: string;
-  email: string;
-  phone: string;
-  suiteName: string;
-  suiteType: string;
-  checkIn: string;
-  checkOut: string;
-  amount: number;
-  gateway: string;
-  status: string;
-  createdAt: Date;
-}) => {
+const buildReceiptPng = async (data: ReceiptData) => {
   const width = 900;
   const height = 1200;
   const png = new PNG({ width, height });
-  png.data.fill(255);
+  fillPngRect(png, 0, 0, width, height, PNG_COLORS.pageBackground);
 
-  let cursorY = 40;
-  const lineHeight = 20;
-  const scale = 2;
-  const writeLine = (text: string) => {
-    drawTextOnPng(png, 40, cursorY, text, scale);
-    cursorY += lineHeight;
-  };
+  const statusValue = normalizeReceiptText(data.status).toUpperCase();
+  const gatewayValue = normalizeReceiptText(data.gateway).toUpperCase();
+  const formattedAmount = formatCurrency(data.amount);
+  const statusColor = statusValue === 'PAID' ? PNG_COLORS.success : PNG_COLORS.warning;
 
-  writeLine('517 VIP SUITES AND APARTMENTS');
-  cursorY += 10;
-  writeLine('PAYMENT RECEIPT');
-  cursorY += 10;
+  fillPngRect(png, 0, 0, width, 190, PNG_COLORS.header);
+  fillPngRect(png, 0, 188, width, 2, PNG_COLORS.gold);
 
-  writeLine(`RECEIPT DATE: ${data.createdAt.toLocaleString()}`);
-  writeLine(`PAYMENT REF: ${data.reference}`);
-  writeLine(`BOOKING REF: ${data.bookingReference}`);
-  writeLine(`STATUS: ${data.status}`);
-  writeLine(`GATEWAY: ${data.gateway}`);
-  cursorY += 10;
+  const logoAsset = getReceiptLogoAsset();
+  if (logoAsset) {
+    drawPngImage(png, logoAsset.png, 36, 22, 138, 138);
+  }
 
-  writeLine('GUEST DETAILS');
-  writeLine(`NAME: ${data.guestName}`);
-  writeLine(`EMAIL: ${data.email}`);
-  writeLine(`PHONE: ${data.phone}`);
-  cursorY += 10;
+  const titleX = logoAsset ? 190 : 48;
+  drawTextOnPng(png, titleX, 46, 'PAYMENT RECEIPT', 4, PNG_COLORS.white);
+  drawTextOnPng(png, titleX, 98, '517 VIP SUITES AND APARTMENTS', 2, PNG_COLORS.gold);
+  drawTextOnPng(png, titleX, 126, `RECEIPT NO: ${data.reference}`, 2, PNG_COLORS.titleLight);
+  drawTextOnPng(
+    png,
+    titleX,
+    152,
+    `ISSUED: ${formatReceiptDate(data.createdAt, true)}`,
+    2,
+    PNG_COLORS.titleLight
+  );
 
-  writeLine('BOOKING DETAILS');
-  writeLine(`SUITE: ${data.suiteName} (${data.suiteType})`);
-  writeLine(`CHECK-IN: ${data.checkIn}`);
-  writeLine(`CHECK-OUT: ${data.checkOut}`);
-  cursorY += 10;
+  let cursorY = 216;
+  fillPngRect(png, 40, cursorY, 820, 92, PNG_COLORS.summary);
+  drawPngRectBorder(png, 40, cursorY, 820, 92, PNG_COLORS.border);
+  fillPngRect(png, 313, cursorY + 14, 1, 64, PNG_COLORS.border);
+  fillPngRect(png, 586, cursorY + 14, 1, 64, PNG_COLORS.border);
 
-  writeLine(`AMOUNT: ${formatCurrency(data.amount)}`);
-  cursorY += 10;
+  drawTextOnPng(png, 64, cursorY + 24, 'STATUS', 2, PNG_COLORS.textMuted);
+  drawTextOnPng(png, 64, cursorY + 52, statusValue, 3, statusColor);
 
-  writeLine('THANK YOU FOR CHOOSING 517 VIP SUITES.');
-  cursorY += 10;
+  drawTextOnPng(png, 340, cursorY + 24, 'GATEWAY', 2, PNG_COLORS.textMuted);
+  drawTextOnPng(png, 340, cursorY + 52, gatewayValue, 3, PNG_COLORS.textPrimary);
 
-  const messageLines = wrapText(`Message: ${data.status}`, 40);
-  messageLines.forEach((line) => writeLine(line));
+  drawTextOnPng(png, 612, cursorY + 24, 'AMOUNT', 2, PNG_COLORS.textMuted);
+  drawTextOnPng(png, 612, cursorY + 52, formattedAmount, 3, PNG_COLORS.textPrimary);
+
+  cursorY += 112;
+  cursorY = drawReceiptSectionPng(png, cursorY, 'GUEST DETAILS', [
+    { label: 'Guest Name', value: data.guestName, maxChars: 64 },
+    { label: 'Email Address', value: data.email, maxChars: 64 },
+    { label: 'Phone Number', value: data.phone, maxChars: 64 },
+  ]);
+
+  cursorY = drawReceiptSectionPng(png, cursorY, 'BOOKING DETAILS', [
+    { label: 'Suite Name', value: data.suiteName, maxChars: 64 },
+    { label: 'Suite Type', value: data.suiteType, maxChars: 64 },
+    { label: 'Check In', value: formatReceiptDate(data.checkIn), maxChars: 64 },
+    { label: 'Check Out', value: formatReceiptDate(data.checkOut), maxChars: 64 },
+  ]);
+
+  cursorY = drawReceiptSectionPng(png, cursorY, 'PAYMENT DETAILS', [
+    { label: 'Payment Reference', value: data.reference, maxChars: 64 },
+    { label: 'Booking Reference', value: data.bookingReference, maxChars: 64 },
+    { label: 'Payment Gateway', value: gatewayValue, maxChars: 64 },
+    { label: 'Amount Paid', value: formattedAmount, maxChars: 64 },
+  ]);
+
+  fillPngRect(png, 40, cursorY, 820, 66, PNG_COLORS.white);
+  drawPngRectBorder(png, 40, cursorY, 820, 66, PNG_COLORS.border);
+  drawTextOnPng(
+    png,
+    58,
+    cursorY + 18,
+    'THIS RECEIPT IS SYSTEM GENERATED AND CONFIRMS YOUR SUCCESSFUL PAYMENT.',
+    2,
+    PNG_COLORS.textMuted
+  );
+  drawTextOnPng(
+    png,
+    58,
+    cursorY + 40,
+    'THANK YOU FOR CHOOSING 517 VIP SUITES AND APARTMENTS.',
+    2,
+    PNG_COLORS.textPrimary
+  );
 
   return PNG.sync.write(png);
 };
