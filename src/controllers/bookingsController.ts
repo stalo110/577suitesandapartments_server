@@ -2,6 +2,8 @@ import { Op } from 'sequelize';
 import { Request, Response } from 'express';
 import { Booking } from '../models/BookingModel';
 import { Suite } from '../models/SuiteModel';
+import { Payment } from '../models/PaymentModel';
+import { buildReceiptPdf } from './paymentsController';
 import {
   sendAdminBookingNotification,
   sendBookingConfirmationEmail,
@@ -255,5 +257,66 @@ export const cancelBooking = async (req: Request, res: Response) => {
     return res.json(toBookingResponse(booking));
   } catch (_error) {
     return res.status(500).json({ error: 'Error cancelling booking' });
+  }
+};
+
+export const downloadAdminBookingReceipt = async (req: Request, res: Response) => {
+  try {
+    const bookingId = String(req.params.id);
+    const format = String(req.params.format || 'pdf').toLowerCase();
+
+    if (format !== 'pdf') {
+      return res.status(400).json({ error: 'Only PDF receipt is supported for admin print' });
+    }
+
+    const booking = await Booking.findByPk(bookingId, {
+      include: [{ model: Suite, as: 'suite' }],
+    });
+
+    if (!booking || !booking.suite) {
+      return res.status(404).json({ error: 'Booking details not found' });
+    }
+
+    const payment =
+      (await Payment.findOne({
+        where: { bookingId: booking.id, status: 'PAID' },
+        order: [['createdAt', 'DESC']],
+      })) ||
+      (await Payment.findOne({
+        where: { bookingId: booking.id },
+        order: [['createdAt', 'DESC']],
+      }));
+
+    const paymentMethodFallback = String(
+      booking.paymentMethod || (booking.manualBooking ? 'MANUAL' : 'ONLINE')
+    )
+      .trim()
+      .toUpperCase();
+
+    const receiptData = {
+      reference: payment?.reference || booking.bookingReference,
+      bookingReference: booking.bookingReference,
+      guestName: booking.guestName,
+      email: booking.email,
+      phone: booking.phone,
+      suiteName: booking.suite.name,
+      suiteType: booking.suite.type,
+      checkIn: String(booking.checkIn),
+      checkOut: String(booking.checkOut),
+      amount: payment ? Number(payment.amount) : Number(booking.totalAmount),
+      gateway: payment?.gateway || paymentMethodFallback,
+      status: payment?.status || booking.paymentStatus,
+      createdAt: payment?.createdAt || booking.createdAt || new Date(),
+    };
+
+    const pdf = await buildReceiptPdf(receiptData);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="receipt_${booking.bookingReference}.pdf"`
+    );
+    return res.send(pdf);
+  } catch (_error) {
+    return res.status(500).json({ error: 'Error generating booking receipt' });
   }
 };

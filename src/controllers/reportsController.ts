@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { Op } from 'sequelize';
 import PDFDocument from 'pdfkit';
 import { Request, Response } from 'express';
@@ -57,6 +59,59 @@ interface PdfSection {
   };
 }
 
+const REPORT_COLORS = {
+  header: '#0B2545',
+  gold: '#D4AF37',
+  titleLight: '#E4EDF7',
+  metaLight: '#C6D6E8',
+  summaryBg: '#EEF4FC',
+  summaryBorder: '#D6E3F0',
+  sectionBg: '#F8FAFC',
+  sectionBand: '#EEF4FC',
+  border: '#DCE6F1',
+  rowAlt: '#FBFDFF',
+  textPrimary: '#12263A',
+  textMuted: '#6B778C',
+} as const;
+
+let cachedReportLogoPath: string | null | undefined;
+
+const resolveReportLogoPath = () => {
+  if (cachedReportLogoPath !== undefined) {
+    return cachedReportLogoPath;
+  }
+
+  const envLogoPath = process.env.RECEIPT_LOGO_PATH || process.env.REPORT_LOGO_PATH;
+  const candidates = [
+    envLogoPath,
+    path.resolve(process.cwd(), 'Client/public/logo.png'),
+    path.resolve(process.cwd(), '../Client/public/logo.png'),
+    path.resolve(process.cwd(), '../../Client/public/logo.png'),
+    path.resolve(__dirname, '../../../Client/public/logo.png'),
+    path.resolve(__dirname, '../../../../Client/public/logo.png'),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  cachedReportLogoPath = candidates.find((candidate) => fs.existsSync(candidate)) || null;
+  return cachedReportLogoPath;
+};
+
+const formatReportDate = (value: Date, includeTime = false) => {
+  const formatter = new Intl.DateTimeFormat('en-NG', includeTime
+    ? {
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      }
+    : {
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+      });
+  return formatter.format(value);
+};
+
 const sanitizePdfCell = (value: unknown) => {
   if (value === null || value === undefined || value === '') {
     return '-';
@@ -110,8 +165,40 @@ const ensurePdfSpace = (
   }
 };
 
+const drawPdfSectionHeading = (
+  doc: InstanceType<typeof PDFDocument>,
+  x: number,
+  width: number,
+  title: string
+) => {
+  const sectionHeight = 34;
+  ensurePdfSpace(doc, sectionHeight + 8);
+  const y = doc.y;
+
+  doc.save();
+  doc.roundedRect(x, y, width, sectionHeight, 8).fillAndStroke(REPORT_COLORS.sectionBg, REPORT_COLORS.border);
+  doc.restore();
+
+  doc.save();
+  doc
+    .rect(x + 1, y + 1, width - 2, sectionHeight - 2)
+    .fill(REPORT_COLORS.sectionBand);
+  doc.restore();
+
+  doc
+    .fillColor(REPORT_COLORS.textPrimary)
+    .font('Helvetica-Bold')
+    .fontSize(11)
+    .text(title, x + 14, y + 11);
+
+  doc.y = y + sectionHeight + 8;
+};
+
 const drawPdfTable = (
   doc: InstanceType<typeof PDFDocument>,
+  x: number,
+  width: number,
+  sectionTitle: string,
   headers: string[],
   rows: string[][]
 ) => {
@@ -119,69 +206,243 @@ const drawPdfTable = (
     return;
   }
 
-  const tableLeft = doc.page.margins.left;
-  const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const columnCount = headers.length;
-  const columnWidth = tableWidth / columnCount;
-  const headerHeight = 20;
-  const rowHeight = 18;
-  const pageBottom = doc.page.height - doc.page.margins.bottom;
-  const textPaddingX = 4;
-  const textPaddingY = 5;
+  const columnWidth = width / columnCount;
+  const headerHeight = 24;
+  const rowHeight = 22;
+  const textPaddingX = 6;
+  const textPaddingY = 7;
 
-  const drawRow = (cells: string[], isHeader: boolean) => {
+  const drawHeader = () => {
+    ensurePdfSpace(doc, headerHeight + rowHeight);
     const y = doc.y;
-    const currentRowHeight = isHeader ? headerHeight : rowHeight;
 
     for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
-      const x = tableLeft + columnIndex * columnWidth;
-      const cellValue = sanitizePdfCell(cells[columnIndex] ?? '');
-
+      const cellX = x + columnIndex * columnWidth;
+      const cellValue = sanitizePdfCell(headers[columnIndex] ?? '');
       doc
-        .rect(x, y, columnWidth, currentRowHeight)
-        .fillAndStroke(isHeader ? '#f4f4f4' : '#ffffff', '#d6d6d6');
-
+        .rect(cellX, y, columnWidth, headerHeight)
+        .fillAndStroke(REPORT_COLORS.summaryBg, REPORT_COLORS.border);
       doc
-        .fillColor(isHeader ? '#111111' : '#222222')
-        .font(isHeader ? 'Helvetica-Bold' : 'Helvetica')
-        .fontSize(8)
-        .text(cellValue, x + textPaddingX, y + textPaddingY, {
+        .fillColor(REPORT_COLORS.header)
+        .font('Helvetica-Bold')
+        .fontSize(8.5)
+        .text(cellValue, cellX + textPaddingX, y + textPaddingY, {
           width: columnWidth - textPaddingX * 2,
-          height: currentRowHeight - textPaddingY,
-          ellipsis: true,
           lineBreak: false,
+          ellipsis: true,
         });
     }
 
-    doc.y = y + currentRowHeight;
+    doc.y = y + headerHeight;
   };
 
-  const drawHeader = () => {
-    ensurePdfSpace(doc, headerHeight + 2);
-    drawRow(headers, true);
+  const drawRow = (cells: string[], rowIndex: number) => {
+    const y = doc.y;
+    const backgroundColor = rowIndex % 2 === 0 ? '#FFFFFF' : REPORT_COLORS.rowAlt;
+
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+      const cellX = x + columnIndex * columnWidth;
+      const cellValue = sanitizePdfCell(cells[columnIndex] ?? '');
+
+      doc
+        .rect(cellX, y, columnWidth, rowHeight)
+        .fillAndStroke(backgroundColor, REPORT_COLORS.border);
+
+      doc
+        .fillColor(REPORT_COLORS.textPrimary)
+        .font('Helvetica')
+        .fontSize(8.5)
+        .text(cellValue, cellX + textPaddingX, y + textPaddingY, {
+          width: columnWidth - textPaddingX * 2,
+          lineBreak: false,
+          ellipsis: true,
+        });
+    }
+
+    doc.y = y + rowHeight;
   };
 
   drawHeader();
 
-  if (!rows.length) {
+  const tableRows = rows.length
+    ? rows
+    : [
+        [
+          'No records found for selected period.',
+          ...new Array(Math.max(0, columnCount - 1)).fill(''),
+        ],
+      ];
+
+  tableRows.forEach((row, rowIndex) => {
+    const pageBottom = doc.page.height - doc.page.margins.bottom;
     if (doc.y + rowHeight > pageBottom) {
       doc.addPage();
+      drawPdfSectionHeading(doc, x, width, `${sectionTitle} (Continued)`);
       drawHeader();
     }
-    const emptyRow = ['No records found for selected period.', ...new Array(Math.max(0, columnCount - 1)).fill('')];
-    drawRow(emptyRow, false);
-  } else {
-    rows.forEach((row) => {
-      if (doc.y + rowHeight > pageBottom) {
-        doc.addPage();
-        drawHeader();
-      }
-      drawRow(row, false);
-    });
+    drawRow(row, rowIndex);
+  });
+
+  doc.moveDown(0.7);
+};
+
+const drawPdfLineSection = (
+  doc: InstanceType<typeof PDFDocument>,
+  x: number,
+  width: number,
+  lines: string[]
+) => {
+  const contentLines = lines.length ? lines : ['No data available.'];
+  const sectionHeight = Math.max(42, contentLines.length * 16 + 24);
+  ensurePdfSpace(doc, sectionHeight + 10);
+  const y = doc.y;
+
+  doc.save();
+  doc.roundedRect(x, y, width, sectionHeight, 8).fillAndStroke('#FFFFFF', REPORT_COLORS.border);
+  doc.restore();
+
+  let lineY = y + 12;
+  contentLines.forEach((line) => {
+    doc
+      .fillColor(REPORT_COLORS.textPrimary)
+      .font('Helvetica')
+      .fontSize(10)
+      .text(line, x + 14, lineY, { width: width - 28 });
+    lineY += 16;
+  });
+
+  doc.y = y + sectionHeight + 10;
+};
+
+const drawPdfReportHeader = (
+  doc: InstanceType<typeof PDFDocument>,
+  x: number,
+  width: number,
+  title: string,
+  periodLabel: string,
+  sectionCount: number,
+  recordCount: number
+) => {
+  const logoPath = resolveReportLogoPath();
+  let cursorY = doc.page.margins.top;
+  const headerHeight = 126;
+
+  doc.save();
+  doc.roundedRect(x, cursorY, width, headerHeight, 12).fill(REPORT_COLORS.header);
+  doc.restore();
+
+  if (logoPath) {
+    try {
+      doc.image(logoPath, x + 16, cursorY + 18, { fit: [88, 88], align: 'center' });
+    } catch (_error) {
+      // Ignore logo rendering failure and continue report generation.
+    }
   }
 
-  doc.fillColor('#000000').font('Helvetica').fontSize(10);
-  doc.moveDown(0.7);
+  const titleX = x + (logoPath ? 120 : 24);
+  doc
+    .fillColor(REPORT_COLORS.gold)
+    .font('Helvetica-Bold')
+    .fontSize(9)
+    .text('OFFICIAL REPORT EXPORT', titleX, cursorY + 18);
+  doc
+    .fillColor('#FFFFFF')
+    .font('Helvetica-Bold')
+    .fontSize(22)
+    .text(title, titleX, cursorY + 32, {
+      width: width - (titleX - x) - 200,
+      lineBreak: false,
+      ellipsis: true,
+    });
+  doc
+    .fillColor(REPORT_COLORS.titleLight)
+    .font('Helvetica')
+    .fontSize(10)
+    .text('517 VIP Suites & Apartments', titleX, cursorY + 62)
+    .text(`Period: ${periodLabel}`, titleX, cursorY + 77)
+    .text(`Generated: ${formatReportDate(new Date(), true)}`, titleX, cursorY + 92);
+
+  const metaX = x + width - 198;
+  doc
+    .fillColor(REPORT_COLORS.metaLight)
+    .font('Helvetica')
+    .fontSize(9)
+    .text('SECTIONS', metaX, cursorY + 26, { width: 178, align: 'right' });
+  doc
+    .fillColor('#FFFFFF')
+    .font('Helvetica-Bold')
+    .fontSize(13)
+    .text(String(sectionCount), metaX, cursorY + 38, { width: 178, align: 'right' });
+  doc
+    .fillColor(REPORT_COLORS.metaLight)
+    .font('Helvetica')
+    .fontSize(9)
+    .text('RECORDS', metaX, cursorY + 58, { width: 178, align: 'right' });
+  doc
+    .fillColor('#FFFFFF')
+    .font('Helvetica-Bold')
+    .fontSize(13)
+    .text(String(recordCount), metaX, cursorY + 70, { width: 178, align: 'right' });
+
+  cursorY += headerHeight + 18;
+
+  const summaryHeight = 78;
+  const summaryColumnWidth = width / 3;
+  doc.save();
+  doc
+    .roundedRect(x, cursorY, width, summaryHeight, 10)
+    .fillAndStroke(REPORT_COLORS.summaryBg, REPORT_COLORS.summaryBorder);
+  doc.restore();
+
+  doc.save();
+  doc
+    .moveTo(x + summaryColumnWidth, cursorY + 14)
+    .lineTo(x + summaryColumnWidth, cursorY + summaryHeight - 14);
+  doc
+    .moveTo(x + summaryColumnWidth * 2, cursorY + 14)
+    .lineTo(x + summaryColumnWidth * 2, cursorY + summaryHeight - 14);
+  doc.lineWidth(1).strokeColor(REPORT_COLORS.summaryBorder).stroke();
+  doc.restore();
+
+  doc
+    .fillColor(REPORT_COLORS.textMuted)
+    .font('Helvetica')
+    .fontSize(9)
+    .text('REPORT TYPE', x + 16, cursorY + 20);
+  doc
+    .fillColor(REPORT_COLORS.textPrimary)
+    .font('Helvetica-Bold')
+    .fontSize(12)
+    .text(title, x + 16, cursorY + 37, {
+      width: summaryColumnWidth - 26,
+      lineBreak: false,
+      ellipsis: true,
+    });
+
+  doc
+    .fillColor(REPORT_COLORS.textMuted)
+    .font('Helvetica')
+    .fontSize(9)
+    .text('SECTIONS', x + summaryColumnWidth + 16, cursorY + 20);
+  doc
+    .fillColor(REPORT_COLORS.textPrimary)
+    .font('Helvetica-Bold')
+    .fontSize(14)
+    .text(String(sectionCount), x + summaryColumnWidth + 16, cursorY + 38);
+
+  doc
+    .fillColor(REPORT_COLORS.textMuted)
+    .font('Helvetica')
+    .fontSize(9)
+    .text('TOTAL RECORDS', x + summaryColumnWidth * 2 + 16, cursorY + 20);
+  doc
+    .fillColor(REPORT_COLORS.textPrimary)
+    .font('Helvetica-Bold')
+    .fontSize(14)
+    .text(String(recordCount), x + summaryColumnWidth * 2 + 16, cursorY + 38);
+
+  return cursorY + summaryHeight + 16;
 };
 
 const buildPdfBuffer = (
@@ -190,40 +451,69 @@ const buildPdfBuffer = (
   sections: PdfSection[]
 ) =>
   new Promise<Buffer>((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 48 });
+    const doc = new PDFDocument({ size: 'A4', margin: 44 });
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    doc.font('Helvetica-Bold').fontSize(18).fillColor('#000000').text(title);
-    doc.moveDown(0.5);
-    doc.font('Helvetica').fontSize(10).fillColor('#444444').text(`Period: ${periodLabel}`);
-    doc.moveDown(1);
+    const contentX = doc.page.margins.left;
+    const contentWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const totalRecords = sections.reduce((sum, section) => {
+      if (section.table) {
+        return sum + section.table.rows.length;
+      }
+      if (section.lines) {
+        return sum + section.lines.length;
+      }
+      return sum;
+    }, 0);
+
+    doc.y = drawPdfReportHeader(
+      doc,
+      contentX,
+      contentWidth,
+      title,
+      periodLabel,
+      sections.length,
+      totalRecords
+    );
 
     sections.forEach((section) => {
-      ensurePdfSpace(doc, 28);
-      doc.font('Helvetica-Bold').fontSize(13).fillColor('#000000').text(section.title);
-      doc.moveDown(0.3);
+      drawPdfSectionHeading(doc, contentX, contentWidth, section.title);
 
       if (section.table) {
-        drawPdfTable(doc, section.table.headers, section.table.rows);
+        drawPdfTable(doc, contentX, contentWidth, section.title, section.table.headers, section.table.rows);
         return;
       }
 
-      if (section.lines?.length) {
-        doc.font('Helvetica').fontSize(10).fillColor('#111111');
-        section.lines.forEach((line) => {
-          ensurePdfSpace(doc, 16);
-          doc.text(line);
-        });
-        doc.moveDown(0.8);
-        return;
-      }
-
-      doc.font('Helvetica').fontSize(10).fillColor('#666666').text('No data available.');
-      doc.moveDown(0.8);
+      drawPdfLineSection(doc, contentX, contentWidth, section.lines || []);
     });
+
+    ensurePdfSpace(doc, 54);
+    const footerY = doc.y;
+    doc.save();
+    doc.roundedRect(contentX, footerY, contentWidth, 44, 8).fillAndStroke('#FFFFFF', REPORT_COLORS.border);
+    doc.restore();
+
+    doc
+      .fillColor(REPORT_COLORS.textMuted)
+      .font('Helvetica')
+      .fontSize(9)
+      .text(
+        'This report is system-generated and intended for internal administrative use.',
+        contentX + 12,
+        footerY + 12,
+        { width: contentWidth - 24, align: 'center' }
+      );
+    doc
+      .fillColor(REPORT_COLORS.textPrimary)
+      .font('Helvetica-Bold')
+      .fontSize(9)
+      .text('517 VIP Suites & Apartments', contentX + 12, footerY + 25, {
+        width: contentWidth - 24,
+        align: 'center',
+      });
 
     doc.end();
   });

@@ -520,7 +520,7 @@ const drawReceiptSectionPng = (png: PNG, y: number, title: string, rows: Receipt
   return y + sectionHeight + 14;
 };
 
-const buildReceiptPdf = (data: ReceiptData) =>
+export const buildReceiptPdf = (data: ReceiptData) =>
   new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 44 });
     const chunks: Buffer[] = [];
