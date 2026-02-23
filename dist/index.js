@@ -30,6 +30,7 @@ const teamRoutes_1 = __importDefault(require("./routes/teamRoutes"));
 const googleReviewsRoutes_1 = __importDefault(require("./routes/googleReviewsRoutes"));
 const adminUserRoutes_1 = __importDefault(require("./routes/adminUserRoutes"));
 const rbacService_1 = require("./services/rbacService");
+const paymentEnv_1 = require("./utils/paymentEnv");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const allowedOrigins = [
@@ -114,7 +115,9 @@ const startServer = async () => {
         }
     }
     await (0, rbacService_1.ensureDefaultRolesAndPermissions)();
+    const paymentEnv = (0, paymentEnv_1.getPaymentEnvironmentSummary)();
     console.log("Database connected");
+    console.log(`Payment env: paystack=${paymentEnv.paystack.secretMode} flutterwave=${paymentEnv.flutterwave.secretMode}`);
     app.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);
     });

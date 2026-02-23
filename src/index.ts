@@ -26,6 +26,7 @@ import TeamRouter from "./routes/teamRoutes";
 import GoogleReviewsRouter from "./routes/googleReviewsRoutes";
 import AdminUserRouter from "./routes/adminUserRoutes";
 import { ensureDefaultRolesAndPermissions } from "./services/rbacService";
+import { getPaymentEnvironmentSummary } from "./utils/paymentEnv";
 
 dotenv.config();
 
@@ -123,8 +124,12 @@ const startServer = async () => {
     }
   }
   await ensureDefaultRolesAndPermissions();
+  const paymentEnv = getPaymentEnvironmentSummary();
 
   console.log("Database connected");
+  console.log(
+    `Payment env: paystack=${paymentEnv.paystack.secretMode} flutterwave=${paymentEnv.flutterwave.secretMode}`
+  );
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });

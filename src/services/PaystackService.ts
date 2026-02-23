@@ -4,6 +4,7 @@ import { Transaction } from '../models/TransactionModel';
 import { paymentEvents } from '../events/paymentEvents';
 import { createFetchClient, GatewayError, GatewayTimeoutError, HttpClient } from './httpClient';
 import { logPayment, logPaymentError } from '../utils/paymentLogger';
+import { getEnvValue, isValidPaystackSecretKey } from '../utils/paymentEnv';
 
 interface PaystackInitializeResponse {
   status: boolean;
@@ -28,13 +29,6 @@ interface PaystackVerifyResponse {
 }
 
 const normalizeAmount = (amount: number) => Number(Number(amount).toFixed(2));
-const sanitizeKey = (value?: string) =>
-  String(value || '')
-    .trim()
-    .replace(/^['"]|['"]$/g, '')
-    .replace(/^Bearer\s+/i, '');
-const isPaystackSecretKey = (value: string) => /^sk_(test|live)_/i.test(value);
-
 const mapPaystackGatewayError = (error: unknown) => {
   const plainMessage =
     error instanceof Error ? error.message : typeof error === 'string' ? error : '';
@@ -66,14 +60,24 @@ class PaystackService {
   private webhookSecret: string;
 
   constructor(client?: HttpClient) {
-    this.secretKey = sanitizeKey(process.env.PAYSTACK_SECRET_KEY || process.env.PAYSTACK_SECRET);
-    this.publicKey = sanitizeKey(process.env.PAYSTACK_PUBLIC_KEY || process.env.PAYSTACK_PUBLIC);
-    this.webhookSecret = sanitizeKey(process.env.PAYSTACK_WEBHOOK_SECRET || this.secretKey);
+    this.secretKey = getEnvValue(
+      'PAYSTACK_SECRET_KEY',
+      'PAYSTACK_LIVE_SECRET_KEY',
+      'PAYSTACK_SECRET_KEY_LIVE',
+      'PAYSTACK_SECRET'
+    );
+    this.publicKey = getEnvValue(
+      'PAYSTACK_PUBLIC_KEY',
+      'PAYSTACK_LIVE_PUBLIC_KEY',
+      'PAYSTACK_PUBLIC_KEY_LIVE',
+      'PAYSTACK_PUBLIC'
+    );
+    this.webhookSecret = getEnvValue('PAYSTACK_WEBHOOK_SECRET') || this.secretKey;
 
     if (!this.secretKey) {
       throw new Error('PAYSTACK_SECRET_KEY is not configured');
     }
-    if (!isPaystackSecretKey(this.secretKey)) {
+    if (!isValidPaystackSecretKey(this.secretKey)) {
       throw new Error(
         'PAYSTACK_SECRET_KEY format is invalid. It must be a Paystack secret key (sk_test_... or sk_live_...).'
       );

@@ -9,6 +9,7 @@ import { Suite } from '../models/SuiteModel';
 import { User } from '../models/UserModel';
 import PaymentDispatcher from '../services/PaymentDispatcher';
 import { logPayment, logPaymentError } from '../utils/paymentLogger';
+import { getEnvValue, getPaymentEnvironmentSummary } from '../utils/paymentEnv';
 
 const formatCurrency = (value: number) => `₦${Number(value).toLocaleString()}`;
 
@@ -294,6 +295,20 @@ export const initializePayment = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Unsupported payment gateway' });
     }
 
+    const paymentEnvSummary = getPaymentEnvironmentSummary();
+    if (normalizedGateway === 'paystack' && !paymentEnvSummary.paystack.secretFormatValid) {
+      return res.status(500).json({
+        error:
+          'Payment gateway configuration error: PAYSTACK_SECRET_KEY is missing or invalid. Please set a valid Paystack secret key (sk_test_... or sk_live_...).',
+      });
+    }
+    if (normalizedGateway === 'flutterwave' && !paymentEnvSummary.flutterwave.secretFormatValid) {
+      return res.status(500).json({
+        error:
+          'Payment gateway configuration error: FLUTTERWAVE_SECRET_KEY is missing or invalid. Please set a valid Flutterwave secret key (FLWSECK_TEST-..., FLWSECK_LIVE-..., or FLWSECK-...).',
+      });
+    }
+
     const booking = await Booking.findByPk(parsedBookingId);
     if (!booking) {
       return res.status(404).json({ error: 'Booking not found' });
@@ -461,9 +476,35 @@ export const verifyPaymentRedirect = async (req: Request, res: Response) => {
 };
 
 export const getPaymentConfig = async (_req: Request, res: Response) => {
+  const paystackPublicKey = getEnvValue(
+    'PAYSTACK_PUBLIC_KEY',
+    'PAYSTACK_LIVE_PUBLIC_KEY',
+    'PAYSTACK_PUBLIC_KEY_LIVE',
+    'PAYSTACK_PUBLIC'
+  );
+  const flutterwavePublicKey = getEnvValue(
+    'FLUTTERWAVE_PUBLIC_KEY',
+    'FLUTTERWAVE_LIVE_PUBLIC_KEY',
+    'FLUTTERWAVE_PUBLIC_KEY_LIVE',
+    'FLW_PUBLIC_KEY',
+    'FLUTTERWAVE_PUBLIC'
+  );
+  const summary = getPaymentEnvironmentSummary();
+
+  await logPayment('payment.config.fetch', {
+    paystack: Boolean(paystackPublicKey),
+    flutterwave: Boolean(flutterwavePublicKey),
+    paystack_mode: summary.paystack.secretMode,
+    flutterwave_mode: summary.flutterwave.secretMode,
+  });
+
   return res.json({
-    paystackPublicKey: process.env.PAYSTACK_PUBLIC_KEY || '',
-    flutterwavePublicKey: process.env.FLUTTERWAVE_PUBLIC_KEY || '',
+    paystackPublicKey,
+    flutterwavePublicKey,
+    paystackMode: summary.paystack.secretMode,
+    flutterwaveMode: summary.flutterwave.secretMode,
+    paystackSecretConfigured: summary.paystack.secretConfigured,
+    flutterwaveSecretConfigured: summary.flutterwave.secretConfigured,
   });
 };
 
