@@ -1,17 +1,20 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import type { UserRole } from '../models/UserModel';
-import { getUserPermissionNames } from '../services/rbacService';
+import { getUserPermissionNames, getUserRoleNames } from '../services/rbacService';
 
 export interface AuthPayload {
   id: string;
   email: string;
   role: UserRole;
   roles?: string[];
+  primaryRole?: string;
   permissions?: string[];
 }
 
 type AuthenticatedRequest = Request & { user?: AuthPayload };
+
+const normalizeRoleName = (roleName: string) => roleName.trim().toLowerCase();
 
 const jwtSecret = process.env.JWT_SECRET;
 if (!jwtSecret && process.env.NODE_ENV === 'production') {
@@ -39,6 +42,7 @@ export const authenticate = (req: AuthenticatedRequest, res: Response, next: Nex
       email: decoded.email,
       role: decoded.role,
       roles: Array.isArray(decoded.roles) ? decoded.roles : [],
+      primaryRole: decoded.primaryRole ? String(decoded.primaryRole) : '',
       permissions: Array.isArray(decoded.permissions) ? decoded.permissions : [],
     };
     return next();
@@ -89,6 +93,42 @@ export const authorizePermission = (...requiredPermissions: string[]) => {
         refreshedPermissions.includes('all_access') ||
         requiredPermissions.some((permission) => refreshedPermissions.includes(permission))
       ) {
+        return next();
+      }
+    }
+
+    return res.status(403).json({ message: 'Unauthorized' });
+  };
+};
+
+export const authorizeRoleName = (...requiredRoleNames: string[]) => {
+  const normalizedRequired = requiredRoleNames.map(normalizeRoleName).filter(Boolean);
+
+  return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    if (!normalizedRequired.length) {
+      return next();
+    }
+
+    if (req.user.role !== 'ADMIN') {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    const tokenRoles = [...(req.user.roles || []), req.user.primaryRole || '']
+      .map(normalizeRoleName)
+      .filter(Boolean);
+    if (tokenRoles.some((roleName) => normalizedRequired.includes(roleName))) {
+      return next();
+    }
+
+    const userId = Number(req.user.id);
+    if (!Number.isNaN(userId)) {
+      const refreshedRoleNames = await getUserRoleNames(userId);
+      const normalizedRefreshedRoles = refreshedRoleNames.map(normalizeRoleName);
+      if (normalizedRefreshedRoles.some((roleName) => normalizedRequired.includes(roleName))) {
         return next();
       }
     }

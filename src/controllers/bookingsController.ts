@@ -1,8 +1,11 @@
 import { Op } from 'sequelize';
 import { Request, Response } from 'express';
+import { sequelize } from '../db';
 import { Booking } from '../models/BookingModel';
 import { Suite } from '../models/SuiteModel';
 import { Payment } from '../models/PaymentModel';
+import { OrderItem } from '../models/OrderItemModel';
+import { RestaurantOrder } from '../models/RestaurantOrderModel';
 import { buildReceiptPdf } from './paymentsController';
 import {
   sendAdminBookingNotification,
@@ -318,5 +321,54 @@ export const downloadAdminBookingReceipt = async (req: Request, res: Response) =
     return res.send(pdf);
   } catch (_error) {
     return res.status(500).json({ error: 'Error generating booking receipt' });
+  }
+};
+
+export const deleteAdminBooking = async (req: Request, res: Response) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const bookingId = Number(req.params.id);
+    if (!bookingId) {
+      await transaction.rollback();
+      return res.status(400).json({ error: 'Invalid booking id' });
+    }
+
+    const booking = await Booking.findByPk(bookingId, { transaction });
+    if (!booking) {
+      await transaction.rollback();
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    const linkedOrders = await RestaurantOrder.findAll({
+      where: { bookingId },
+      attributes: ['id'],
+      transaction,
+    });
+    const linkedOrderIds = linkedOrders.map((order) => order.id);
+
+    if (linkedOrderIds.length) {
+      await OrderItem.destroy({
+        where: { restaurantOrderId: { [Op.in]: linkedOrderIds } },
+        transaction,
+      });
+      await RestaurantOrder.destroy({
+        where: { id: { [Op.in]: linkedOrderIds } },
+        transaction,
+      });
+    }
+
+    await Payment.destroy({
+      where: { bookingId },
+      transaction,
+    });
+
+    await booking.destroy({ transaction });
+    await transaction.commit();
+
+    return res.json({ message: 'Booking deleted successfully' });
+  } catch (_error) {
+    await transaction.rollback();
+    return res.status(500).json({ error: 'Error deleting booking' });
   }
 };

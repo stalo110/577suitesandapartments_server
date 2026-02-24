@@ -1,13 +1,14 @@
 import { Router } from 'express';
 import {
   createRestaurantOrder,
+  deleteRestaurantOrder,
   getBookingRestaurantOrders,
   getRestaurantOrderById,
   listRestaurantOrders,
   updateRestaurantOrderPayment,
   updateRestaurantOrderStatus,
 } from '../controllers/restaurantOrderController';
-import { authenticate, authorizePermission } from '../middleware/auth';
+import { authenticate, authorizePermission, authorizeRoleName } from '../middleware/auth';
 
 const router = Router();
 
@@ -74,6 +75,19 @@ router.put(
   authenticate,
   authorizePermission('manage_restaurant_orders'),
   updateRestaurantOrderPayment
+);
+
+router.delete(
+  '/admin/restaurant-orders/:id',
+  authenticate,
+  authorizeRoleName('IT Personnel'),
+  deleteRestaurantOrder
+);
+router.delete(
+  '/api/admin/restaurant-orders/:id',
+  authenticate,
+  authorizeRoleName('IT Personnel'),
+  deleteRestaurantOrder
 );
 
 router.get(

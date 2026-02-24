@@ -340,3 +340,33 @@ export const getBookingRestaurantOrders = async (req: Request, res: Response) =>
     return res.status(500).json({ error: 'Error fetching booking restaurant orders' });
   }
 };
+
+export const deleteRestaurantOrder = async (req: Request, res: Response) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const orderId = Number(req.params.id);
+    if (!orderId) {
+      await transaction.rollback();
+      return res.status(400).json({ error: 'Invalid restaurant order id' });
+    }
+
+    const order = await RestaurantOrder.findByPk(orderId, { transaction });
+    if (!order) {
+      await transaction.rollback();
+      return res.status(404).json({ error: 'Restaurant order not found' });
+    }
+
+    await OrderItem.destroy({
+      where: { restaurantOrderId: orderId },
+      transaction,
+    });
+    await order.destroy({ transaction });
+
+    await transaction.commit();
+    return res.json({ message: 'Restaurant order deleted successfully' });
+  } catch (_error) {
+    await transaction.rollback();
+    return res.status(500).json({ error: 'Error deleting restaurant order' });
+  }
+};

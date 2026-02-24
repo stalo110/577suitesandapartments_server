@@ -2,13 +2,14 @@ import { Router } from 'express';
 import {
   createAdminBooking,
   createBooking,
+  deleteAdminBooking,
   getAdminBookings,
   getBookingById,
   updateBookingStatus,
   cancelBooking,
   downloadAdminBookingReceipt,
 } from '../controllers/bookingsController';
-import { authenticate, authorizePermission } from '../middleware/auth';
+import { authenticate, authorizePermission, authorizeRoleName } from '../middleware/auth';
 
 const router = Router();
 
@@ -51,6 +52,18 @@ router.put(
   authenticate,
   authorizePermission('manage_bookings'),
   updateBookingStatus
+);
+router.delete(
+  '/admin/bookings/:id',
+  authenticate,
+  authorizeRoleName('IT Personnel'),
+  deleteAdminBooking
+);
+router.delete(
+  '/api/admin/bookings/:id',
+  authenticate,
+  authorizeRoleName('IT Personnel'),
+  deleteAdminBooking
 );
 router.post('/bookings/:id/cancel', cancelBooking);
 
