@@ -1131,7 +1131,10 @@ export const downloadReceipt = async (req: Request, res: Response) => {
       payment =
         (await Payment.findOne({
           where: { bookingId: booking.id, status: 'PAID' },
-          order: [['createdAt', 'DESC']],
+          order: [
+            ['updatedAt', 'DESC'],
+            ['createdAt', 'DESC'],
+          ],
         })) ||
         (await Payment.findOne({
           where: { bookingId: booking.id },
@@ -1154,6 +1157,10 @@ export const downloadReceipt = async (req: Request, res: Response) => {
       .toUpperCase();
 
     const receiptReference = payment?.reference || booking.bookingReference;
+    const receiptIssuedAt =
+      payment?.status === 'PAID'
+        ? payment.updatedAt || payment.createdAt || booking.createdAt || new Date()
+        : payment?.createdAt || booking.createdAt || new Date();
 
     const receiptData = {
       reference: receiptReference,
@@ -1168,7 +1175,7 @@ export const downloadReceipt = async (req: Request, res: Response) => {
       amount: payment ? Number(payment.amount) : Number(booking.totalAmount),
       gateway: payment?.gateway || paymentMethodFallback,
       status: payment?.status || booking.paymentStatus,
-      createdAt: payment?.createdAt || booking.createdAt || new Date(),
+      createdAt: receiptIssuedAt,
     };
 
     if (format === 'pdf') {
