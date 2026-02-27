@@ -71,7 +71,7 @@ const formatCurrency = (value: number) =>
 const RECEIPT_TIME_ZONE = getEnvValue('RECEIPT_TIME_ZONE') || 'Africa/Lagos';
 
 const parseDateOnlyString = (value: string) => {
-  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) {
     return null;
   }
