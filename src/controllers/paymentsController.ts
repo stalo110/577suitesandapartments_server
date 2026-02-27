@@ -69,7 +69,7 @@ const formatCurrency = (value: number) =>
   })}`;
 
 const parseDateOnlyString = (value: string) => {
-  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!match) {
     return null;
   }
@@ -117,6 +117,7 @@ const formatReceiptDate = (value: Date | string, includeTime = false) => {
         year: 'numeric',
         month: 'short',
         day: '2-digit',
+        timeZone: 'UTC',
       };
   return new Intl.DateTimeFormat('en-NG', options).format(parsed);
 };
