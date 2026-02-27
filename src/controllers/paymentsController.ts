@@ -68,7 +68,39 @@ const formatCurrency = (value: number) =>
     maximumFractionDigits: 2,
   })}`;
 
+const parseDateOnlyString = (value: string) => {
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, monthIndex, day));
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== monthIndex ||
+    parsed.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return parsed;
+};
+
 const formatReceiptDate = (value: Date | string, includeTime = false) => {
+  if (!includeTime && typeof value === 'string') {
+    const parsedDateOnly = parseDateOnlyString(value);
+    if (parsedDateOnly) {
+      return new Intl.DateTimeFormat('en-NG', {
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+        timeZone: 'UTC',
+      }).format(parsedDateOnly);
+    }
+  }
+
   const parsed = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(parsed.getTime())) {
     return String(value);
