@@ -21,8 +21,8 @@ type ReceiptData = {
   phone: string;
   suiteName: string;
   suiteType: string;
-  checkIn: string;
-  checkOut: string;
+  checkIn: Date | string;
+  checkOut: Date | string;
   amount: number;
   gateway: string;
   status: string;
@@ -68,6 +68,8 @@ const formatCurrency = (value: number) =>
     maximumFractionDigits: 2,
   })}`;
 
+const RECEIPT_TIME_ZONE = getEnvValue('RECEIPT_TIME_ZONE') || 'Africa/Lagos';
+
 const parseDateOnlyString = (value: string) => {
   const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!match) {
@@ -96,7 +98,7 @@ const formatReceiptDate = (value: Date | string, includeTime = false) => {
         year: 'numeric',
         month: 'short',
         day: '2-digit',
-        timeZone: 'UTC',
+        timeZone: RECEIPT_TIME_ZONE,
       }).format(parsedDateOnly);
     }
   }
@@ -112,12 +114,13 @@ const formatReceiptDate = (value: Date | string, includeTime = false) => {
         day: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
+        timeZone: RECEIPT_TIME_ZONE,
       }
     : {
         year: 'numeric',
         month: 'short',
         day: '2-digit',
-        timeZone: 'UTC',
+        timeZone: RECEIPT_TIME_ZONE,
       };
   return new Intl.DateTimeFormat('en-NG', options).format(parsed);
 };
@@ -1087,44 +1090,85 @@ export const getAdminPayments = async (_req: Request, res: Response) => {
 export const downloadReceipt = async (req: Request, res: Response) => {
   try {
     const paymentId = String(req.params.paymentId);
-    const payment = await Payment.findByPk(paymentId);
-    if (!payment) {
-      return res.status(404).json({ error: 'Payment not found' });
-    }
-
-    if (payment.status !== 'PAID') {
-      return res.status(400).json({ error: 'Receipt is available only for confirmed payments' });
-    }
-
-    const format = String(req.params.format);
+    const bookingIdParam = String(req.params.bookingId || '');
+    const format = String(req.params.format || '').toLowerCase();
     if (!['pdf', 'png'].includes(format)) {
       return res.status(400).json({ error: 'Format must be pdf or png' });
     }
 
-    const booking = await Booking.findByPk(payment.bookingId, {
+    let payment: Payment | null = null;
+    let bookingId: number | null = null;
+
+    if (bookingIdParam) {
+      const parsedBookingId = Number(bookingIdParam);
+      if (Number.isInteger(parsedBookingId) && parsedBookingId > 0) {
+        bookingId = parsedBookingId;
+      }
+    } else {
+      payment = await Payment.findByPk(paymentId);
+      bookingId = payment ? Number(payment.bookingId) : null;
+
+      if (!bookingId) {
+        const parsedBookingId = Number(paymentId);
+        if (Number.isInteger(parsedBookingId) && parsedBookingId > 0) {
+          bookingId = parsedBookingId;
+        }
+      }
+    }
+
+    if (!bookingId) {
+      return res.status(404).json({ error: 'Booking details not found' });
+    }
+
+    const booking = await Booking.findByPk(bookingId, {
       include: [{ model: Suite, as: 'suite' }],
     });
     if (!booking || !booking.suite) {
       return res.status(404).json({ error: 'Booking details not found' });
     }
+
+    if (!payment) {
+      payment =
+        (await Payment.findOne({
+          where: { bookingId: booking.id, status: 'PAID' },
+          order: [['createdAt', 'DESC']],
+        })) ||
+        (await Payment.findOne({
+          where: { bookingId: booking.id },
+          order: [['createdAt', 'DESC']],
+        }));
+    }
+
+    if (payment && payment.status !== 'PAID') {
+      return res.status(400).json({ error: 'Receipt is available only for confirmed payments' });
+    }
+
     if (booking.paymentStatus !== 'PAID' || booking.status !== 'CONFIRMED') {
       return res.status(400).json({ error: 'Receipt is available only for confirmed payments' });
     }
 
+    const paymentMethodFallback = String(
+      booking.paymentMethod || (booking.manualBooking ? 'MANUAL' : 'ONLINE')
+    )
+      .trim()
+      .toUpperCase();
+
+    const receiptReference = payment?.reference || booking.bookingReference;
+
     const receiptData = {
-      reference: payment.reference,
+      reference: receiptReference,
       bookingReference: booking.bookingReference,
       guestName: booking.guestName,
       email: booking.email,
       phone: booking.phone,
       suiteName: booking.suite.name,
       suiteType: booking.suite.type,
-      checkIn: String(booking.checkIn),
-      checkOut: String(booking.checkOut),
-      amount: Number(payment.amount),
-      gateway: payment.gateway,
-      status: payment.status,
-      createdAt: payment.createdAt || new Date(),
+      checkIn: booking.getDataValue('checkIn'),
+      checkOut: booking.getDataValue('checkOut'),
+      amount: payment ? Number(payment.amount) : Number(booking.totalAmount),
+      gateway: payment?.gateway || paymentMethodFallback,
+      status: payment?.status || booking.paymentStatus,
+      createdAt: payment?.createdAt || booking.createdAt || new Date(),
     };
 
     if (format === 'pdf') {
@@ -1132,7 +1176,7 @@ export const downloadReceipt = async (req: Request, res: Response) => {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader(
         'Content-Disposition',
-        `attachment; filename="receipt_${payment.reference}.pdf"`
+        `attachment; filename="receipt_${receiptReference}.pdf"`
       );
       return res.send(pdf);
     }
@@ -1141,7 +1185,7 @@ export const downloadReceipt = async (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'image/png');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="receipt_${payment.reference}.png"`
+      `attachment; filename="receipt_${receiptReference}.png"`
     );
     return res.send(png);
   } catch (_error) {

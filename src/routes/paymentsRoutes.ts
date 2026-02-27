@@ -24,5 +24,6 @@ router.get(
   getTransactionByReference
 );
 router.get('/payments/:paymentId/receipt/:format', downloadReceipt);
+router.get('/bookings/:bookingId/receipt/:format', downloadReceipt);
 
 export default router;
