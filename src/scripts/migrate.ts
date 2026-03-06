@@ -31,14 +31,6 @@ async function run() {
   try {
     await sequelize.authenticate();
 
-    const queryInterface = sequelize.getQueryInterface();
-    const tables = await queryInterface.showAllTables();
-    const tableNames = getTableNames(tables).filter(Boolean);
-
-    if (!tableNames.includes('transactions')) {
-      await createTransactionsTable(queryInterface, sequelize);
-    }
-
     await Suite.sync({ alter: true });
     await Booking.sync({ alter: true });
     await GalleryItem.sync({ alter: true });
@@ -53,6 +45,15 @@ async function run() {
     await PromotionSuite.sync({ alter: true });
     await RestaurantOrder.sync({ alter: true });
     await OrderItem.sync({ alter: true });
+
+    const queryInterface = sequelize.getQueryInterface();
+    const tables = await queryInterface.showAllTables();
+    const tableNames = getTableNames(tables).filter(Boolean);
+
+    if (!tableNames.includes('transactions')) {
+      await createTransactionsTable(queryInterface, sequelize);
+    }
+
     await Transaction.sync({ alter: false });
     // Add other model syncs here if needed.
 
