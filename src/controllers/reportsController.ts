@@ -8,15 +8,48 @@ import { Payment } from '../models/PaymentModel';
 import { RestaurantOrder } from '../models/RestaurantOrderModel';
 import { Suite } from '../models/SuiteModel';
 
+const toValidDate = (value: unknown) => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const parsed =
+    value instanceof Date ? new Date(value.getTime()) : new Date(String(value));
+
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const normalizeRangeDate = (value: Date, endOfDay = false) => {
+  const normalized = new Date(value.getTime());
+
+  if (endOfDay) {
+    normalized.setHours(23, 59, 59, 999);
+  } else {
+    normalized.setHours(0, 0, 0, 0);
+  }
+
+  return normalized;
+};
+
 const parseDateRange = (req: Request) => {
   const { startDate, endDate } = req.query;
-  const start = startDate ? new Date(String(startDate)) : new Date();
-  if (!startDate) {
-    start.setDate(start.getDate() - 30);
+  const parsedStart = toValidDate(startDate);
+  const parsedEnd = toValidDate(endDate);
+
+  const defaultStart = new Date();
+  defaultStart.setDate(defaultStart.getDate() - 30);
+
+  const start = normalizeRangeDate(parsedStart || defaultStart);
+  const end = normalizeRangeDate(parsedEnd || new Date(), true);
+
+  if (start.getTime() <= end.getTime()) {
+    return { start, end };
   }
-  const end = endDate ? new Date(String(endDate)) : new Date();
-  end.setHours(23, 59, 59, 999);
-  return { start, end };
+
+  const swappedStart = normalizeRangeDate(end);
+  const swappedEnd = normalizeRangeDate(start, true);
+
+  return { start: swappedStart, end: swappedEnd };
 };
 
 const toReportResponse = (data: any, period: { start: Date; end: Date }) => ({
@@ -39,10 +72,13 @@ const getIsoWeekLabel = (date: Date) => {
 const formatMonthKey = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
-const groupCounts = (items: Booking[], keyFn: (date: Date) => string) => {
+const groupCounts = (
+  items: Array<{ createdAt?: Date | string | null }>,
+  keyFn: (date: Date) => string
+) => {
   const map = new Map<string, number>();
   items.forEach((item) => {
-    const key = keyFn(item.createdAt || new Date());
+    const key = keyFn(toValidDate(item.createdAt) || new Date());
     map.set(key, (map.get(key) || 0) + 1);
   });
   return Array.from(map.entries())
@@ -566,12 +602,24 @@ const withinRange = (period: { start: Date; end: Date }) => ({
   [Op.between]: [period.start, period.end],
 });
 
+const withinAnyRange = (period: { start: Date; end: Date }, fields: string[]) => ({
+  [Op.or]: fields.map((field) => ({ [field]: withinRange(period) })),
+});
+
+const normalizeRevenueChannel = (value: unknown, fallback: string) => {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return normalized || fallback;
+};
+
+const equalsIgnoreCase = (value: unknown, expected: string) =>
+  String(value ?? '').trim().toUpperCase() === expected.toUpperCase();
+
 const getRevenueRows = async (period: { start: Date; end: Date }): Promise<RevenueRow[]> => {
   const [payments, manualBookings, restaurantOrders] = await Promise.all([
     Payment.findAll({
       where: {
         status: 'PAID',
-        createdAt: withinRange(period),
+        ...withinAnyRange(period, ['updatedAt', 'createdAt']),
       },
       order: [['createdAt', 'DESC']],
     }),
@@ -580,16 +628,18 @@ const getRevenueRows = async (period: { start: Date; end: Date }): Promise<Reven
         manualBooking: true,
         paymentStatus: 'PAID',
         paymentMethod: {
-          [Op.in]: ['cash', 'transfer'],
+          [Op.in]: ['cash', 'transfer', 'card', 'CASH', 'TRANSFER', 'CARD'],
         },
-        createdAt: withinRange(period),
+        ...withinAnyRange(period, ['updatedAt', 'createdAt']),
       },
       order: [['createdAt', 'DESC']],
     }),
     RestaurantOrder.findAll({
       where: {
-        paymentStatus: 'paid',
-        createdAt: withinRange(period),
+        paymentStatus: {
+          [Op.in]: ['paid', 'PAID'],
+        },
+        ...withinAnyRange(period, ['updatedAt', 'orderDate', 'createdAt']),
       },
       order: [['createdAt', 'DESC']],
     }),
@@ -601,9 +651,9 @@ const getRevenueRows = async (period: { start: Date; end: Date }): Promise<Reven
     reference: payment.reference,
     bookingId: String(payment.bookingId),
     amount: Number(payment.amount),
-    channel: String(payment.gateway),
+    channel: normalizeRevenueChannel(payment.gateway, 'ONLINE'),
     status: payment.status,
-    createdAt: payment.createdAt || null,
+    createdAt: toValidDate(payment.updatedAt) || toValidDate(payment.createdAt),
   }));
 
   const bookingRows: RevenueRow[] = manualBookings.map((booking) => ({
@@ -612,9 +662,9 @@ const getRevenueRows = async (period: { start: Date; end: Date }): Promise<Reven
     reference: booking.bookingReference,
     bookingId: String(booking.id),
     amount: Number(booking.totalAmount),
-    channel: String(booking.paymentMethod || 'cash').toUpperCase(),
+    channel: normalizeRevenueChannel(booking.paymentMethod, 'CASH'),
     status: booking.paymentStatus,
-    createdAt: booking.createdAt || null,
+    createdAt: toValidDate(booking.updatedAt) || toValidDate(booking.createdAt),
   }));
 
   const orderRows: RevenueRow[] = restaurantOrders.map((order) => ({
@@ -623,14 +673,17 @@ const getRevenueRows = async (period: { start: Date; end: Date }): Promise<Reven
     reference: `RO-${order.id}`,
     bookingId: order.bookingId ? String(order.bookingId) : null,
     amount: Number(order.totalAmount),
-    channel: `RESTAURANT_${String(order.paymentMethod || 'cash').toUpperCase()}`,
+    channel: `RESTAURANT_${normalizeRevenueChannel(order.paymentMethod, 'CASH')}`,
     status: order.paymentStatus,
-    createdAt: order.createdAt || null,
+    createdAt:
+      toValidDate(order.updatedAt) ||
+      toValidDate(order.orderDate) ||
+      toValidDate(order.createdAt),
   }));
 
   return [...paymentRows, ...bookingRows, ...orderRows].sort((a, b) => {
-    const aTime = a.createdAt ? a.createdAt.getTime() : 0;
-    const bTime = b.createdAt ? b.createdAt.getTime() : 0;
+    const aTime = toValidDate(a.createdAt)?.getTime() || 0;
+    const bTime = toValidDate(b.createdAt)?.getTime() || 0;
     return bTime - aTime;
   });
 };
@@ -740,13 +793,13 @@ export const getSummaryReport = async (req: Request, res: Response) => {
 
     const totalBookings = bookings.length;
     const confirmedBookings = bookings.filter(
-      (booking) => booking.status === 'CONFIRMED'
+      (booking) => equalsIgnoreCase(booking.status, 'CONFIRMED')
     ).length;
     const cancelledBookings = bookings.filter(
-      (booking) => booking.status === 'CANCELLED'
+      (booking) => equalsIgnoreCase(booking.status, 'CANCELLED')
     ).length;
     const pendingBookings = bookings.filter(
-      (booking) => booking.status === 'PENDING'
+      (booking) => equalsIgnoreCase(booking.status, 'PENDING')
     ).length;
 
     const dailyBookings = groupCounts(bookings, formatDateKey);
@@ -758,7 +811,7 @@ export const getSummaryReport = async (req: Request, res: Response) => {
     const revenueByGateway = getRevenueByChannel(revenueRows);
 
     const confirmedBookingsList = bookings.filter(
-      (booking) => booking.status === 'CONFIRMED'
+      (booking) => equalsIgnoreCase(booking.status, 'CONFIRMED')
     );
     const periodStart = new Date(period.start);
     periodStart.setHours(0, 0, 0, 0);
@@ -824,7 +877,8 @@ export const getSummaryReport = async (req: Request, res: Response) => {
     };
 
     return res.json(toReportResponse(summary, period));
-  } catch (_error) {
+  } catch (error) {
+    console.error('Error generating summary report:', error);
     return res.status(500).json({ error: 'Error generating summary report' });
   }
 };

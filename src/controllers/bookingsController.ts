@@ -326,7 +326,8 @@ export const downloadAdminBookingReceipt = async (req: Request, res: Response) =
       `inline; filename="receipt_${booking.bookingReference}.pdf"`
     );
     return res.send(pdf);
-  } catch (_error) {
+  } catch (error) {
+    console.error('Error generating booking receipt:', error);
     return res.status(500).json({ error: 'Error generating booking receipt' });
   }
 };

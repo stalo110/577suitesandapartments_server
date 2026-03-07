@@ -130,6 +130,16 @@ const normalizeReceiptText = (value: string | null | undefined) => {
   return sanitized || 'N/A';
 };
 
+const normalizePdfText = (value: string | null | undefined) => {
+  const normalized = normalizeReceiptText(value)
+    .normalize('NFKD')
+    .replace(/[^\x20-\x7E]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return normalized || 'N/A';
+};
+
 const dispatcher = new PaymentDispatcher();
 
 const normalizeGateway = (gateway?: string, reference?: string) => {
@@ -490,7 +500,7 @@ const drawReceiptSectionPdf = (
 
   doc.font('Helvetica-Bold').fontSize(10);
   const rowHeights = rows.map((row) =>
-    Math.max(14, doc.heightOfString(normalizeReceiptText(row.value), { width: valueWidth }))
+    Math.max(14, doc.heightOfString(normalizePdfText(row.value), { width: valueWidth }))
   );
   const rowsHeight = rowHeights.reduce((sum, rowHeight) => sum + rowHeight, 0);
   const sectionHeight = paddingY + 18 + 10 + rowsHeight + Math.max(0, rows.length - 1) * rowGap + paddingY;
@@ -513,7 +523,7 @@ const drawReceiptSectionPdf = (
       .fillColor('#12263A')
       .font('Helvetica-Bold')
       .fontSize(10)
-      .text(normalizeReceiptText(row.value), x + paddingX + labelWidth + 10, rowY, {
+      .text(normalizePdfText(row.value), x + paddingX + labelWidth + 10, rowY, {
         width: valueWidth,
       });
     rowY += rowHeight + rowGap;
@@ -569,8 +579,8 @@ export const buildReceiptPdf = (data: ReceiptData) =>
     const contentWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
     let cursorY = doc.page.margins.top;
 
-    const statusValue = normalizeReceiptText(data.status).toUpperCase();
-    const gatewayValue = normalizeReceiptText(data.gateway).toUpperCase();
+    const statusValue = normalizePdfText(data.status).toUpperCase();
+    const gatewayValue = normalizePdfText(data.gateway).toUpperCase();
     const formattedAmount = formatCurrency(data.amount);
     const statusColor = statusValue === 'PAID' ? '#1F9D55' : '#B57D28';
 
@@ -595,14 +605,14 @@ export const buildReceiptPdf = (data: ReceiptData) =>
       .font('Helvetica')
       .fontSize(10)
       .text('517 VIP Suites & Apartments', titleX, cursorY + 62)
-      .text(`Issued: ${formatReceiptDate(data.createdAt, true)}`, titleX, cursorY + 77);
+      .text(normalizePdfText(`Issued: ${formatReceiptDate(data.createdAt, true)}`), titleX, cursorY + 77);
 
     const metaX = contentX + contentWidth - 210;
     doc.fillColor('#C6D6E8').font('Helvetica').fontSize(9).text('Receipt No.', metaX, cursorY + 22, {
       width: 190,
       align: 'right',
     });
-    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(11).text(normalizeReceiptText(data.reference), metaX, cursorY + 34, {
+    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(11).text(normalizePdfText(data.reference), metaX, cursorY + 34, {
       width: 190,
       align: 'right',
     });
@@ -610,7 +620,7 @@ export const buildReceiptPdf = (data: ReceiptData) =>
       width: 190,
       align: 'right',
     });
-    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(11).text(normalizeReceiptText(data.bookingReference), metaX, cursorY + 66, {
+    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(11).text(normalizePdfText(data.bookingReference), metaX, cursorY + 66, {
       width: 190,
       align: 'right',
     });
